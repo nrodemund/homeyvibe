@@ -1,26 +1,40 @@
 import { HttpError } from '../http/errors.js';
 import { normalizePage } from '../config/pages.js';
 import { normalizeAction } from '../config/actions.js';
+import { normalizeFloorplan } from '../config/floorplan.js';
 import { slugify } from '../config/validate.js';
 import { validateValue } from '../providers/zigbee2mqtt/capabilities.js';
 
 /**
- * Apply a `{ pages, actions }` bundle (typically written by an LLM from the context file).
+ * Apply a `{ pages, actions, floorplan? }` bundle (typically written by an LLM from the context file).
  * Everything is validated first; nothing is written unless all of it is valid.
- * Items with an existing id are updated, new ones are created.
+ * Items with an existing id are updated, new ones are created. A floorplan replaces the current one.
  *
- * @returns {{ created: { pages: string[], actions: string[] }, updated: { pages: string[], actions: string[] } }}
+ * @returns {{ created: { pages: string[], actions: string[] }, updated: { pages: string[], actions: string[] }, floorplan?: { rooms: number, devices: number } }}
  */
-export function importConfig({ bundle, pages, actions, registry }) {
+export function importConfig({ bundle, pages, actions, registry, floorplan = null }) {
   if (!bundle || typeof bundle !== 'object' || Array.isArray(bundle)) {
     throw new HttpError(400, 'Expected an object like { "pages": [...], "actions": [...] }');
   }
   const pageList = bundle.pages ?? [];
   const actionList = bundle.actions ?? [];
   if (!Array.isArray(pageList) || !Array.isArray(actionList)) throw new HttpError(400, 'pages and actions must be arrays');
-  if (!pageList.length && !actionList.length) throw new HttpError(400, 'Nothing to import');
+  const planInput = bundle.floorplan;
+  if (planInput !== undefined && !floorplan) throw new HttpError(400, 'This server does not store a floor plan');
+  if (!pageList.length && !actionList.length && planInput === undefined) throw new HttpError(400, 'Nothing to import');
 
   const errors = [];
+  let plan = null;
+  if (planInput !== undefined) {
+    try {
+      plan = normalizeFloorplan(planInput);
+      plan.devices.forEach((d, i) => {
+        if (!registry.get(d.deviceId)) errors.push(`floorplan.devices[${i}]: unknown device ${d.deviceId}`);
+      });
+    } catch (err) {
+      errors.push(`floorplan: ${err.message}`);
+    }
+  }
   const withIds = (list, nameKey) => list.map((item) => ({ ...item, id: item?.id ?? slugify(item?.[nameKey]) }));
   const normalizedActions = [];
   for (const [i, raw] of withIds(actionList, 'name').entries()) {
@@ -90,6 +104,10 @@ export function importConfig({ bundle, pages, actions, registry }) {
       pages.create(order === undefined ? rest : p);
       result.created.pages.push(p.id);
     }
+  }
+  if (plan) {
+    floorplan.replace(plan);
+    result.floorplan = { rooms: plan.rooms.length, devices: plan.devices.length };
   }
   return result;
 }

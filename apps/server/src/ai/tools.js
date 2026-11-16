@@ -53,6 +53,21 @@ const triggerSchema = z.union([
     days: z.array(z.enum(DAYS)).optional(),
   }),
 ]);
+export const floorplanSchema = z.object({
+  rooms: z.array(z.object({
+    id: z.string().optional().describe('Generated from name if omitted'),
+    name: z.string(),
+    floor: z.number().int().optional().describe('0 = ground floor'),
+    height: z.number().optional().describe('Ceiling height in meters, default 2.5'),
+    points: z.array(z.array(z.number()).length(2)).min(3).describe('Corners [x, z] in meters, seen from above, in order'),
+  })),
+  devices: z.array(z.object({
+    deviceId: z.string(),
+    roomId: z.string().nullable().optional(),
+    position: z.array(z.number()).length(3).describe('[x, height, z] in meters'),
+  })),
+});
+
 export const actionSchema = z.object({
   id: z.string().optional().describe('Existing id to update; omit to create (generated from name)'),
   name: z.string(),
@@ -69,7 +84,8 @@ export const actionSchema = z.object({
  * Each tool: { name, title, description, shape (zod raw shape), annotations, permission, run(args) }.
  * `call(tool, args)` checks the permission and returns { ok, text }.
  */
-export function homeTools({ user, registry, pages, actions, engine, by = `ai:${user.username}` }) {
+export function homeTools({ user, registry, pages, actions, engine, floorplan = null, by = `ai:${user.username}` }) {
+  const deps = { pages, actions, registry, floorplan };
   const tools = [
     {
       name: 'get_home_overview',
@@ -82,6 +98,7 @@ export function homeTools({ user, registry, pages, actions, engine, by = `ai:${u
         devices: registry.list().map(describeDevice),
         pages: pages.list(),
         actions: actions.list(),
+        ...(floorplan ? { floorplan: floorplan.get() } : {}),
         you: { name: user.displayName, role: user.role, permissions: user.permissions },
       }),
     },
@@ -125,11 +142,11 @@ export function homeTools({ user, registry, pages, actions, engine, by = `ai:${u
     {
       name: 'apply_configuration',
       title: 'Create or update pages and actions',
-      description: 'Create or update several pages and actions at once. Items with an existing id are updated. Everything is validated first; nothing is saved if anything is wrong.',
-      shape: { pages: z.array(pageSchema).optional(), actions: z.array(actionSchema).optional() },
+      description: 'Create or update several pages and actions at once, and optionally replace the floor plan. Items with an existing id are updated. Everything is validated first; nothing is saved if anything is wrong.',
+      shape: { pages: z.array(pageSchema).optional(), actions: z.array(actionSchema).optional(), ...(floorplan ? { floorplan: floorplanSchema.optional() } : {}) },
       annotations: { idempotentHint: true },
       permission: PERMISSIONS.CONFIG_WRITE,
-      run: (bundle) => importConfig({ bundle, pages, actions, registry }),
+      run: (bundle) => importConfig({ bundle, ...deps }),
     },
     {
       name: 'save_page',
@@ -138,7 +155,7 @@ export function homeTools({ user, registry, pages, actions, engine, by = `ai:${u
       shape: { page: pageSchema },
       annotations: { idempotentHint: true },
       permission: PERMISSIONS.CONFIG_WRITE,
-      run: ({ page }) => importConfig({ bundle: { pages: [page] }, pages, actions, registry }),
+      run: ({ page }) => importConfig({ bundle: { pages: [page] }, ...deps }),
     },
     {
       name: 'save_action',
@@ -147,7 +164,19 @@ export function homeTools({ user, registry, pages, actions, engine, by = `ai:${u
       shape: { action: actionSchema },
       annotations: { idempotentHint: true },
       permission: PERMISSIONS.CONFIG_WRITE,
-      run: ({ action }) => importConfig({ bundle: { actions: [action] }, pages, actions, registry }),
+      run: ({ action }) => importConfig({ bundle: { actions: [action] }, ...deps }),
+    },
+    floorplan && {
+      name: 'save_floorplan',
+      title: 'Update the floor plan',
+      description: 'Replace the floor plan used by 3D pages: rooms as polygons and where each device sits. Send the whole plan; read the current one from get_home_overview first.',
+      shape: { floorplan: floorplanSchema },
+      annotations: { idempotentHint: true },
+      permission: PERMISSIONS.CONFIG_WRITE,
+      run: ({ floorplan: plan }) => {
+        const r = importConfig({ bundle: { floorplan: plan }, ...deps });
+        return `Saved the floor plan: ${r.floorplan.rooms} rooms, ${r.floorplan.devices} placed devices.`;
+      },
     },
     {
       name: 'delete_page',
@@ -176,7 +205,7 @@ export function homeTools({ user, registry, pages, actions, engine, by = `ai:${u
           : `Deleted action ${actionId}.`;
       },
     },
-  ];
+  ].filter(Boolean);
 
   async function call(tool, args) {
     try {

@@ -78,6 +78,27 @@ An action is a named list of steps, optionally run automatically by triggers:
 - triggers are optional; op is one of ${OPERATORS.join(', ')}; days are ${DAYS.join(', ')}; time is the server's local time
 - id is generated from the name unless given
 
+## Floor plan format (3D pages)
+
+Pages with layout "3d" show the home's floor plan with devices placed in it. There is one plan for the whole home:
+
+\`\`\`json
+{
+  "rooms": [
+    { "name": "Living room", "floor": 0, "height": 2.5, "points": [[0, 0], [5, 0], [5, 4], [0, 4]] },
+    { "name": "Kitchen", "points": [[5, 0], [8, 0], [8, 4], [5, 4]] }
+  ],
+  "devices": [
+    { "deviceId": "<device id>", "roomId": "living-room", "position": [2.5, 2.2, 2] }
+  ]
+}
+\`\`\`
+
+- Coordinates are meters seen from above; points are the room's corners in order as [x, z]; neighbouring rooms share walls
+- position is [x, height above the floor, z]; ceiling lights sit near the ceiling, sensors and switches around 1.2–1.5
+- room ids are generated from names; floor 0 is the ground floor
+- A 3D page shows the devices listed in its sections, or every placed device when it lists none
+
 ## Good configuration
 
 - Group devices by room when names hint at rooms; otherwise by kind (lights, climate, covers).
@@ -87,12 +108,12 @@ An action is a named list of steps, optionally run automatically by triggers:
 `;
 
 /** Full context document (Markdown). */
-export function buildContext({ registry, pages, actions, now = new Date() }) {
+export function buildContext({ registry, pages, actions, floorplan = null, now = new Date() }) {
   const devices = registry.list().map(describeDevice);
   return `# HomeyVibe home configuration context
 
 Generated ${now.toISOString()}. HomeyVibe is a smart home server. Use this document to propose dashboard pages and actions for this home.
-Reply with JSON of the form \`{ "pages": [ … ], "actions": [ … ] }\` using the formats below; it can be imported in HomeyVibe under Settings → AI → Import.
+Reply with JSON of the form \`{ "pages": [ … ], "actions": [ … ], "floorplan"?: { … } }\` using the formats below; it can be imported in HomeyVibe under Settings → AI → Import.
 
 ${FORMAT_GUIDE}
 ## Devices (${devices.length})
@@ -112,5 +133,11 @@ ${JSON.stringify(pages.list(), null, 2)}
 \`\`\`json
 ${JSON.stringify(actions.list(), null, 2)}
 \`\`\`
-`;
+${floorplan ? `
+## Floor plan (${floorplan.get().rooms.length} rooms)
+
+\`\`\`json
+${JSON.stringify(floorplan.get(), null, 2)}
+\`\`\`
+` : ''}`;
 }
