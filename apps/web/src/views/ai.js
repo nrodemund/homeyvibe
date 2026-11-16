@@ -6,7 +6,7 @@ import { field } from './auth.js';
 export async function openAiDialog(user) {
   const canConfigure = user.permissions.includes('config:write');
   const mcpUrl = `${location.origin}/mcp`;
-  const tokens = await api.tokens();
+  const [tokens, aiStatus] = await Promise.all([api.tokens(), api.aiSettings().catch(() => null)]);
 
   const tokenList = h('ul.token-list');
   const reveal = h('div.reveal');
@@ -35,6 +35,8 @@ export async function openAiDialog(user) {
       ),
       canConfigure ? importForm() : null,
     ),
+
+    canConfigure && aiStatus ? assistantBlock(aiStatus) : null,
   );
   dialog.addEventListener('close', () => dialog.remove());
 
@@ -106,6 +108,38 @@ export async function openAiDialog(user) {
       textarea.value = '';
     });
     return form;
+  }
+
+  function assistantBlock(status) {
+    const state = h('p.muted', { role: 'status' });
+    const describe = (s) => {
+      state.textContent = s.configured
+        ? `Connected${s.keyHint ? ` with key ${s.keyHint}` : ' through the server environment'} · model ${s.model}`
+        : 'Not set up. Add a Claude API key to use the chat button in the corner.';
+    };
+    describe(status);
+    const form = h('form.inline-form', {},
+      field('Claude API key', h('input', { name: 'apiKey', type: 'password', placeholder: 'sk-ant-…', autocomplete: 'off', required: true })),
+      h('button.primary', { type: 'submit' }, status.configured ? 'Replace key' : 'Save key'),
+      h('p.form-error', { role: 'alert' }),
+    );
+    onSubmit(form, async ({ apiKey }) => {
+      describe(await api.updateAiSettings({ apiKey }));
+      form.reset();
+    });
+    const remove = status.source === 'settings'
+      ? h('button.icon-button', { type: 'button', onclick: async () => {
+        describe(await api.updateAiSettings({ apiKey: null }));
+        remove.remove();
+      } }, 'Remove saved key')
+      : null;
+    return h('section.ai-block', {},
+      h('h3', {}, '3. Built-in assistant'),
+      h('p.muted', {}, 'Chat with Claude right inside HomeyVibe. It uses the same tools and each person’s permissions. Usage is billed to this API key.'),
+      state,
+      form,
+      remove,
+    );
   }
 
   renderTokens();

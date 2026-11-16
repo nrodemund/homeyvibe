@@ -3,6 +3,7 @@ import { api, ApiError } from '../api.js';
 import { h, toast } from '../ui.js';
 import { openUsersDialog } from './users.js';
 import { openAiDialog } from './ai.js';
+import { createChat } from './chat.js';
 
 const ICONS = {
   light: '💡', switch: '🔘', cover: '🪟', climate: '🌡️', lock: '🔒', fan: '🌀', sensor: '📟', device: '📦',
@@ -33,6 +34,7 @@ export function renderDashboard(root, user, onSignedOut) {
     <main class="view" aria-live="polite"></main>
     <p class="empty" hidden>No devices yet. Pair a device in zigbee2mqtt, or start the server with <code>npm run demo</code>.</p>
   `;
+  app.append(createChat(user));
   const view = app.querySelector('.view');
   const tabs = app.querySelector('.tabs');
   let pages = [];
