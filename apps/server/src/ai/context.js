@@ -24,8 +24,10 @@ export function describeDevice(device) {
       if (c.valueOn !== undefined) cap.on = c.valueOn;
       if (c.valueOff !== undefined) cap.off = c.valueOff;
       if (c.category) cap.category = c.category;
+      if (device.ranges?.[c.property]) cap.allowed = device.ranges[c.property];
       return cap;
     }),
+    ...(device.access === 'view' ? { access: 'view' } : {}),
     state: device.state,
   };
 }
@@ -105,6 +107,7 @@ Pages with layout "3d" show the home's floor plan with devices placed in it. The
 - Show only the useful capabilities on room pages (power, brightness, position); leave diagnostics (battery, link quality) for the "All devices" view.
 - Offer a few scenes per room (all off, evening, movie) rather than many.
 - Only use device ids and properties that exist below.
+- A device with "access": "view" is read only for you; a capability with "allowed": [min, max] only accepts values in that range.
 `;
 
 /** Full context document (Markdown). */

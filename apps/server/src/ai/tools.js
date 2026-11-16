@@ -5,6 +5,7 @@ import { LAYOUTS } from '../config/pages.js';
 import { DAYS, OPERATORS } from '../config/actions.js';
 import { describeDevice, FORMAT_GUIDE } from './context.js';
 import { importConfig } from './importer.js';
+import { scopedRegistry } from '../auth/access.js';
 
 /** Shared guidance for any model using these tools (MCP instructions, in-app chat system prompt). */
 export const TOOL_GUIDE = `HomeyVibe is a smart home server. You can look at the devices it found, control them, and configure dashboard pages and actions (scenes and automations).
@@ -84,8 +85,16 @@ export const actionSchema = z.object({
  * Each tool: { name, title, description, shape (zod raw shape), annotations, permission, run(args) }.
  * `call(tool, args)` checks the permission and returns { ok, text }.
  */
-export function homeTools({ user, registry, pages, actions, engine, floorplan = null, by = `ai:${user.username}` }) {
+export function homeTools({ user: person, registry: fullRegistry, pages, actions, engine, floorplan = null, access = null, by = `ai:${person.username}` }) {
+  // The AI gets what both the person and the AI user may do (see auth/access.js).
+  const scope = access ? access.aiFor(person) : null;
+  const user = scope?.user ?? person;
+  const registry = scope ? scopedRegistry(fullRegistry, scope.policy) : fullRegistry;
   const deps = { pages, actions, registry, floorplan };
+  const visiblePlan = () => {
+    const plan = floorplan.get();
+    return { ...plan, devices: plan.devices.filter((d) => registry.get(d.deviceId)) };
+  };
   const tools = [
     {
       name: 'get_home_overview',
@@ -98,8 +107,13 @@ export function homeTools({ user, registry, pages, actions, engine, floorplan = 
         devices: registry.list().map(describeDevice),
         pages: pages.list(),
         actions: actions.list(),
-        ...(floorplan ? { floorplan: floorplan.get() } : {}),
-        you: { name: user.displayName, role: user.role, permissions: user.permissions },
+        ...(floorplan ? { floorplan: visiblePlan() } : {}),
+        you: {
+          actingFor: user.displayName,
+          role: user.role,
+          permissions: user.permissions,
+          ...(scope ? { limits: describeLimits(scope) } : {}),
+        },
       }),
     },
     {
@@ -134,6 +148,7 @@ export function homeTools({ user, registry, pages, actions, engine, floorplan = 
       shape: { actionId: z.string() },
       permission: PERMISSIONS.DEVICES_CONTROL,
       run: async ({ actionId }) => {
+        if (registry.check) engine.preflight(actionId, registry.check);
         const result = await engine.run(actionId, { by });
         if (!result.ok) throw new HttpError(400, `Action failed: ${result.error}`);
         return `Ran ${actionId}.`;
@@ -210,7 +225,9 @@ export function homeTools({ user, registry, pages, actions, engine, floorplan = 
   async function call(tool, args) {
     try {
       if (tool.permission && !can(user, tool.permission)) {
-        throw new HttpError(403, `${user.displayName} (${user.role}) is not allowed to do this`);
+        throw new HttpError(403, can(person, tool.permission)
+          ? 'The HomeyVibe AI is not allowed to do this. An admin can change that under People → AI assistant.'
+          : `${person.displayName} (${person.role}) is not allowed to do this`);
       }
       const result = await tool.run(args ?? {});
       return { ok: true, text: typeof result === 'string' ? result : JSON.stringify(result, null, 2) };
@@ -220,4 +237,14 @@ export function homeTools({ user, registry, pages, actions, engine, floorplan = 
   }
 
   return { tools, call };
+}
+
+/** Plain-language summary of the AI's limits for the model. */
+function describeLimits({ ai, policy }) {
+  const notes = [];
+  if (!ai.canControl) notes.push('You may not control devices or run actions.');
+  if (!ai.canConfigure) notes.push('You may not change pages, actions or the floor plan.');
+  notes.push('Devices you may not see are left out. Devices marked access "view" are read only. Capabilities with "allowed": [min, max] only accept values in that range; never try values outside it.');
+  if (policy.unrestricted) notes.pop();
+  return notes;
 }

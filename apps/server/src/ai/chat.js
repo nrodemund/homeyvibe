@@ -76,9 +76,9 @@ export class AiSettings {
 export class ChatService {
   #conversations = new Map(); // userId -> Map(conversationId -> { messages, updatedAt })
 
-  constructor({ settings, registry, pages, actions, engine, floorplan = null, createClient = (apiKey) => new Anthropic({ apiKey }), now = () => Date.now() }) {
+  constructor({ settings, registry, pages, actions, engine, floorplan = null, access = null, createClient = (apiKey) => new Anthropic({ apiKey }), now = () => Date.now() }) {
     this.settings = settings;
-    this.deps = { registry, pages, actions, engine, floorplan };
+    this.deps = { registry, pages, actions, engine, floorplan, access };
     this.createClient = createClient;
     this.now = now;
   }
@@ -135,7 +135,7 @@ export class ChatService {
         fallbacks: 'default',
         system: [
           { type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } },
-          { type: 'text', text: `You are talking to ${user.displayName} (role: ${user.role}). Server time: ${new Date(this.now()).toString()}.` },
+          { type: 'text', text: `You are the HomeyVibe AI user, acting for ${user.displayName} (role: ${user.role}). You can only do what both of you are allowed to; get_home_overview lists your limits. Server time: ${new Date(this.now()).toString()}.` },
         ],
         tools: apiTools,
         messages,

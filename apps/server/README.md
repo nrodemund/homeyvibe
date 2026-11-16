@@ -45,6 +45,17 @@ Passwords are hashed with scrypt. Sessions are random tokens (only their SHA-256
 
 Behind a reverse proxy, keep the `Host` header (or set `X-Forwarded-Host`) and `X-Forwarded-Proto: https` so cookies get the `Secure` flag.
 
+## Limits and the HomeyVibe AI user
+
+Admins can limit what a person (not an admin) or the AI may do, under **People**:
+
+- per device: **Control**, **View only** or **Hidden**, plus a default for new devices
+- value ranges on writable numbers, e.g. a radiator's target temperature only between 18 and 22 °C
+
+The AI has its own entry ("HomeyVibe AI") with two extra switches: *can control devices* and *can change pages, actions and the floor plan*. Whenever the AI acts (the in-app chat, MCP, the context file) it gets only what both the person using it and the AI user may do. Limits are checked on every path: device commands, running actions (every step is checked first, so nothing runs half way), actions the AI writes, and floor plan edits (the AI cannot remove devices it cannot see). Hidden devices are left out of `/api/devices`, the event stream and the AI's view. Automations triggered by state or time are not limited.
+
+`GET /api/access`, `PUT /api/access/ai` and `PUT /api/access/users/:id` (users:manage) read and change them; see `src/auth/access.js`.
+
 ## Pages and actions
 
 **Pages** are dashboard tabs. Each has a title, optional icon, a layout (`grid`, `list` or `3d`) and sections. A section holds items: a device (optionally limited to some `properties`) or an action button.

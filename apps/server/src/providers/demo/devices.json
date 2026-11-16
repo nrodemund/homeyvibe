@@ -45,5 +45,18 @@
       ] },
       { "type": "numeric", "name": "battery", "label": "Battery", "property": "battery", "access": 1, "unit": "%", "value_min": 0, "value_max": 100, "category": "diagnostic" }
     ]
+  },
+  {
+    "id": "living_room_radiator", "name": "Living room radiator", "vendor": "Danfoss", "model": "014G2461",
+    "description": "Ally radiator thermostat",
+    "state": { "occupied_heating_setpoint": 21, "local_temperature": 20.4, "system_mode": "heat", "battery": 76 },
+    "exposes": [
+      { "type": "climate", "features": [
+        { "type": "numeric", "name": "occupied_heating_setpoint", "label": "Target temperature", "property": "occupied_heating_setpoint", "access": 7, "unit": "°C", "value_min": 5, "value_max": 35, "value_step": 0.5 },
+        { "type": "numeric", "name": "local_temperature", "label": "Current temperature", "property": "local_temperature", "access": 5, "unit": "°C" },
+        { "type": "enum", "name": "system_mode", "label": "Mode", "property": "system_mode", "access": 7, "values": ["off", "heat"] }
+      ] },
+      { "type": "numeric", "name": "battery", "label": "Battery", "property": "battery", "access": 1, "unit": "%", "value_min": 0, "value_max": 100, "category": "diagnostic" }
+    ]
   }
 ]

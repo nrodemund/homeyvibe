@@ -40,7 +40,7 @@ test('demo provider loads simulated devices with state', () => {
   const lamp = registry.get('demo:living_room_lamp');
   assert.equal(lamp.name, 'Living room lamp');
   assert.equal(lamp.state.brightness, 180);
-  assert.equal(registry.list().length, 4);
+  assert.equal(registry.list().length, 5);
 });
 
 test('demo commands update state, including toggle', async () => {
@@ -59,7 +59,7 @@ test('GET /api/events streams a snapshot, then live state changes', async () => 
   const [snapshot, state] = await pending;
   controller.abort();
   assert.equal(snapshot.event, 'snapshot');
-  assert.equal(snapshot.data.length, 4);
+  assert.equal(snapshot.data.length, 5);
   assert.deepEqual(state, { event: 'state', data: { id: 'demo:hallway_switch', changes: { state_left: 'ON' } } });
 });
 
