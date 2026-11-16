@@ -1,0 +1,37 @@
+# HomeyVibe
+
+A smart home platform whose core idea is **being easy**: everything is auto-detected, and configuration happens through an LLM.
+
+## Vision
+
+- **Auto-detect everything.** Find devices and their capabilities automatically. Full zigbee2mqtt support, with more providers pluggable.
+- **Configure with AI.** Use direct connectors (Codex, Claude) or upload a context file. The AI finds devices, learns their capabilities, creates UI pages and creates actions.
+- **Control by UI or AI.** Every device and action is reachable both ways.
+- **Multiple page designs**, including 3D views built with three.js.
+- **Room scanning** in the PWA to create a floor layout.
+- **Users and roles.**
+- **Gateways.** A server applet bridges cloud to mobile with end-to-end encryption.
+- **Runs everywhere.** Web, PWA, and Electron desktop.
+
+## Layout
+
+```
+apps/
+  server/    Node.js backend (device providers, automation, API)
+  web/       Vite frontend (web + PWA)
+  desktop/   Electron shell (planned)
+packages/
+  shared/    Shared types and protocol definitions
+docs/        Architecture notes
+```
+
+## Getting started
+
+```sh
+npm install
+npm run dev
+```
+
+## License
+
+To be decided. All rights reserved until a license is chosen.
