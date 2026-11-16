@@ -1,23 +1,19 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { createServer } from 'node:http';
 import { DeviceRegistry } from '../src/devices/registry.js';
 import { createDemoProvider } from '../src/providers/demo/index.js';
-import { createApiHandler } from '../src/http/api.js';
+import { startApi, api } from './helpers.js';
 
-let server, base, registry, demo;
+let ctx, registry, demo;
 
 before(async () => {
   registry = new DeviceRegistry();
   demo = createDemoProvider({ registry, tickMs: 60_000 });
-  server = createServer(createApiHandler({ registry }));
-  await new Promise((r) => server.listen(0, r));
-  base = `http://127.0.0.1:${server.address().port}`;
+  ctx = await startApi(registry);
 });
 after(() => {
   demo.stop();
-  server.closeAllConnections();
-  server.close();
+  ctx.close();
 });
 
 /** Read SSE events from a fetch response until `count` events arrived. */
@@ -56,7 +52,7 @@ test('demo commands update state, including toggle', async () => {
 
 test('GET /api/events streams a snapshot, then live state changes', async () => {
   const controller = new AbortController();
-  const res = await fetch(`${base}/api/events`, { signal: controller.signal });
+  const res = await api(ctx.base, ctx.tokens.guest, '/api/events', { signal: controller.signal });
   assert.equal(res.headers.get('content-type'), 'text/event-stream');
   const pending = readEvents(res, 2);
   setTimeout(() => registry.command('demo:hallway_switch', { state_left: 'ON' }), 50);
@@ -71,7 +67,7 @@ test('event listeners are removed when the client disconnects', async () => {
   await new Promise((r) => setTimeout(r, 100)); // let earlier streams finish closing
   const before = registry.listenerCount('state');
   const controller = new AbortController();
-  const res = await fetch(`${base}/api/events`, { signal: controller.signal });
+  const res = await api(ctx.base, ctx.tokens.guest, '/api/events', { signal: controller.signal });
   await readEvents(res, 1);
   assert.equal(registry.listenerCount('state'), before + 1);
   controller.abort();
