@@ -50,12 +50,65 @@ body {
 .conn::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); }
 .conn[data-conn='online']::before { background: var(--ok); }
 
+.view { padding: 0 16px 32px; display: flex; flex-direction: column; gap: 24px; }
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 16px;
-  padding: 0 16px 32px;
 }
+.grid.actions { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+.section-title { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 10px; }
+
+.tabs {
+  display: flex;
+  gap: 6px;
+  padding: 0 16px 16px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tabs a {
+  white-space: nowrap;
+  text-decoration: none;
+  color: var(--text);
+  font-size: 0.9rem;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--card);
+}
+.tabs a[aria-current='page'] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+
+.action {
+  font: inherit;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
+  transition: transform 0.08s, border-color 0.15s;
+}
+.action:hover:not(:disabled) { border-color: var(--accent); }
+.action:active:not(:disabled) { transform: scale(0.98); }
+.action-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  color: var(--accent);
+  font-size: 0.7rem;
+  flex-shrink: 0;
+}
+.action.running .action-icon { animation: pulse 0.8s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.4; } }
+.card.missing { border-style: dashed; }
 
 .empty { text-align: center; color: var(--muted); padding: 48px 16px; }
 
@@ -71,7 +124,7 @@ body {
 .card.unavailable { opacity: 0.55; }
 .card > header { display: flex; gap: 12px; align-items: center; }
 .card .icon { font-size: 1.6rem; }
-.card h2 { font-size: 1rem; margin: 0; }
+.card h3 { font-size: 1rem; margin: 0; }
 .card .meta { font-size: 0.8rem; color: var(--muted); margin: 2px 0 0; }
 
 .caps { display: flex; flex-direction: column; gap: 10px; }

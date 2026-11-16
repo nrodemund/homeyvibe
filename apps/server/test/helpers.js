@@ -25,7 +25,7 @@ export class FakeMqttClient extends EventEmitter {
  * Start an API server with an in-memory auth store and three users.
  * Returns { base, tokens: { admin, member, guest }, auth, close }.
  */
-export async function startApi(registry) {
+export async function startApi(registry, extra = {}) {
   const { createServer } = await import('node:http');
   const { createApiHandler } = await import('../src/http/api.js');
   const { AuthService } = await import('../src/auth/auth.js');
@@ -39,7 +39,7 @@ export async function startApi(registry) {
     member: (await auth.login('member', 'member-pass-1')).token,
     guest: (await auth.login('guest', 'guest-pass-1')).token,
   };
-  const server = createServer(createApiHandler({ registry, auth }));
+  const server = createServer(createApiHandler({ registry, auth, ...extra }));
   await new Promise((r) => server.listen(0, r));
   const base = `http://127.0.0.1:${server.address().port}`;
   return {
