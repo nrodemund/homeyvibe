@@ -44,3 +44,11 @@ test('deviceIcon infers the device kind', () => {
   assert.equal(deviceIcon({ capabilities: [cap({ property: 'temperature', group: null })] }), 'sensor');
   assert.equal(deviceIcon({ capabilities: [] }), 'device');
 });
+
+test('parseBundle accepts raw JSON and fenced Markdown answers', async () => {
+  globalThis.location ??= { origin: 'http://localhost' };
+  const { parseBundle } = await import('../src/views/ai.js');
+  assert.deepEqual(parseBundle('{"pages":[]}'), { pages: [] });
+  assert.deepEqual(parseBundle('Here you go:\n```json\n{"actions":[]}\n```\nEnjoy'), { actions: [] });
+  assert.throws(() => parseBundle('no json here'), /not valid JSON/);
+});

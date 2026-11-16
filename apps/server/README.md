@@ -68,6 +68,47 @@ Behind a reverse proxy, keep the `Host` header (or set `X-Forwarded-Host`) and `
 
 Ids are generated from the title or name (`living-room`) unless given. Validation returns every problem in one 400 response, which helps AI clients fix everything in one go. A triggered action won't re-trigger within 2 seconds, so it can't loop on its own state changes.
 
+## AI configuration
+
+Two ways to let an AI find devices, build pages and create actions. Both are under **Set up with AI** in the web app's user menu.
+
+### MCP server (Claude, Codex, any MCP client)
+
+`POST /mcp` is a stateless [Model Context Protocol](https://modelcontextprotocol.io) endpoint (Streamable HTTP). Create a personal access token in the web app; the AI acts with that person's role.
+
+```sh
+claude mcp add --transport http homeyvibe http://your-server:8080/mcp --header "Authorization: Bearer hv_…"
+```
+
+```toml
+# ~/.codex/config.toml (and export HOMEYVIBE_TOKEN=hv_…)
+[mcp_servers.homeyvibe]
+url = "http://your-server:8080/mcp"
+bearer_token_env_var = "HOMEYVIBE_TOKEN"
+```
+
+Apps that only speak stdio (e.g. Claude Desktop) can use `npx -y mcp-remote http://your-server:8080/mcp --header "Authorization: Bearer hv_…"` (add `--allow-http` for a non-localhost plain-HTTP URL).
+
+| Tool | Needs | |
+|---|---|---|
+| `get_home_overview` | read | devices with capabilities and state, pages, actions |
+| `list_devices` | read | search by name, vendor, model or id |
+| `control_device` | control | set capability values |
+| `run_action` | control | run an action now |
+| `apply_configuration` | config | create or update many pages and actions at once, all-or-nothing |
+| `save_page`, `save_action` | config | create or replace one |
+| `delete_page`, `delete_action` | config | |
+
+The prompt `set_up_my_home` asks the AI to propose pages and actions and apply them after you confirm. The server instructions describe the page and action formats.
+
+### Context file (any AI)
+
+`GET /api/ai/context` downloads a Markdown file describing every device, the current pages and actions, and the formats. Give it to any AI, then paste its JSON answer into the import box (`POST /api/ai/import`, admins). Imports are checked against real devices, capabilities and value ranges, and nothing is saved unless everything is valid.
+
+### Access tokens
+
+`GET/POST /api/auth/tokens`, `DELETE /api/auth/tokens/:id`. Tokens start with `hv_`, are shown once, stored hashed, and are removed when their user is deleted.
+
 ## API
 
 Everything except health and sign-in needs a session.

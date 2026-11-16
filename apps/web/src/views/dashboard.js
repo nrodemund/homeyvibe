@@ -2,6 +2,7 @@ import { controlKind, splitCapabilities, labelFor, formatValue, deviceIcon } fro
 import { api, ApiError } from '../api.js';
 import { h, toast } from '../ui.js';
 import { openUsersDialog } from './users.js';
+import { openAiDialog } from './ai.js';
 
 const ICONS = {
   light: '💡', switch: '🔘', cover: '🪟', climate: '🌡️', lock: '🔒', fan: '🌀', sensor: '📟', device: '📦',
@@ -43,6 +44,7 @@ export function renderDashboard(root, user, onSignedOut) {
   menu.querySelector('summary').textContent = user.displayName;
   menu.querySelector('.menu-items').append(...[
     h('p.muted', {}, `@${user.username} · ${user.role}`),
+    h('button', { type: 'button', onclick: () => { menu.open = false; openAiDialog(user).catch((e) => toast(e.message)); } }, 'Set up with AI'),
     user.permissions.includes('users:manage')
       ? h('button', { type: 'button', onclick: () => { menu.open = false; openUsersDialog(user).catch((e) => toast(e.message)); } }, 'People')
       : null,

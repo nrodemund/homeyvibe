@@ -97,7 +97,7 @@ export class AuthService {
     if (!user) throw new HttpError(404, 'Unknown user');
     if (user.role === 'admin' && countAdmins(users) === 1) throw new HttpError(409, 'Cannot delete the last admin');
     this.#saveUsers(users.filter((u) => u.id !== id));
-    this.#revokeSessionsFor(id);
+    this.#revokeSessionsFor(id, { includeTokens: true });
   }
 
   // ---- login and sessions ------------------------------------------------------
@@ -131,14 +131,37 @@ export class AuthService {
     return this.store.read('sessions', []).filter((s) => s.expiresAt > this.now());
   }
 
-  /** Resolve a session token to a user, or null. */
+  /** Resolve a session or access token to a user, or null. */
   authenticate(token) {
     if (!token) return null;
     const hash = sha256(token);
-    const session = this.#liveSessions().find((s) => s.hash === hash);
-    if (!session) return null;
-    const user = this.#users().find((u) => u.id === session.userId);
+    const owner = this.#liveSessions().find((s) => s.hash === hash)
+      ?? this.store.read('tokens', []).find((t) => t.hash === hash);
+    if (!owner) return null;
+    const user = this.#users().find((u) => u.id === owner.userId);
     return user ? publicUser(user) : null;
+  }
+
+  // ---- access tokens (for AI clients, scripts) ------------------------------------
+
+  /** Long-lived token acting as the user. The plain token is only returned here. */
+  createAccessToken(userId, name) {
+    const label = String(name ?? '').trim().slice(0, 64);
+    if (!label) throw new HttpError(400, 'Give the token a name, e.g. "Claude Desktop"');
+    const token = `hv_${randomBytes(32).toString('base64url')}`;
+    const record = { id: randomUUID(), userId, name: label, hash: sha256(token), createdAt: new Date(this.now()).toISOString() };
+    this.store.write('tokens', [...this.store.read('tokens', []), record]);
+    return { ...publicToken(record), token };
+  }
+
+  listAccessTokens(userId) {
+    return this.store.read('tokens', []).filter((t) => t.userId === userId).map(publicToken);
+  }
+
+  revokeAccessToken(userId, id) {
+    const tokens = this.store.read('tokens', []);
+    if (!tokens.some((t) => t.id === id && t.userId === userId)) throw new HttpError(404, 'Unknown token');
+    this.store.write('tokens', tokens.filter((t) => t.id !== id));
   }
 
   logout(token) {
@@ -147,8 +170,9 @@ export class AuthService {
     this.store.write('sessions', this.#liveSessions().filter((s) => s.hash !== hash));
   }
 
-  #revokeSessionsFor(userId) {
+  #revokeSessionsFor(userId, { includeTokens = false } = {}) {
     this.store.write('sessions', this.#liveSessions().filter((s) => s.userId !== userId));
+    if (includeTokens) this.store.write('tokens', this.store.read('tokens', []).filter((t) => t.userId !== userId));
   }
 }
 
@@ -161,6 +185,10 @@ function publicUser(u) {
     permissions: permissionsFor(u.role),
     createdAt: u.createdAt,
   };
+}
+
+function publicToken(t) {
+  return { id: t.id, name: t.name, createdAt: t.createdAt };
 }
 
 function countAdmins(users) {
