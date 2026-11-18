@@ -7,6 +7,7 @@ import { scopedRegistry } from '../auth/access.js';
 import { aiToolkit, systemBlocks, DEFAULT_MODEL } from '../ai/chat.js';
 import { normalizeFloorplan } from '../config/floorplan.js';
 import { checkPlacementSettings, visibleFloorplan } from '../config/floorplan-settings.js';
+import { HISTORY_RANGES } from '../devices/history-db.js';
 
 const MAX_BODY = 64 * 1024;
 const COOKIE = 'hv_session';
@@ -58,13 +59,30 @@ const COOKIE_MAX_AGE_S = 30 * 24 * 60 * 60;
  *   POST /api/ai/chat                         devices:read: { message, conversationId? } -> SSE
  *   DELETE /api/ai/chat/:id                   forget a conversation
  */
-export function createApiHandler({ registry, auth, pages, actions, engine, aiSettings, chat, floorplan = null, access = null, zigbee = null }) {
+export function createApiHandler({ registry, auth, pages, actions, engine, aiSettings, chat, floorplan = null, access = null, zigbee = null, historySelection = null, approval = null, notifications = null }) {
   /** The registry as this person may see and use it. */
   const devicesFor = (user) => (access ? scopedRegistry(registry, access.policyFor(user)) : registry);
   /** The registry as the AI sees it when acting for this person. */
   const devicesForAi = (user) => (access ? scopedRegistry(registry, access.aiFor(user).policy) : registry);
   const floorplanFor = (user, plan) => visibleFloorplan(plan, access?.policyFor(user), can(user, PERMISSIONS.DEVICES_CONTROL));
   const aiDeps = { registry, pages, actions, engine, floorplan, access, zigbee };
+  function findDevice(user, id) {
+    const device = devicesFor(user).get(id);
+    if (!device) throw new HttpError(404, 'Unknown device');
+    return device;
+  }
+  function numericProperty(device, property) {
+    if (!device.capabilities.some((cap) => cap.property === property && cap.readable && cap.type === 'numeric')) {
+      throw new HttpError(400, 'Choose a readable numeric device property');
+    }
+    return property;
+  }
+  function checkActionWrite({ params, body, fromCookie }) {
+    const previous = params.id && actions.get(params.id);
+    if (!fromCookie && [previous?.security, body?.security].some((value) => value && value !== 'none')) {
+      throw new HttpError(403, 'Manage protected actions in HomeyVibe while signed in');
+    }
+  }
   const routes = [
     ['GET', '/api/health', { public: true }, () => ({ ok: true, name: 'homeyvibe' })],
 
@@ -76,11 +94,24 @@ export function createApiHandler({ registry, auth, pages, actions, engine, aiSet
     ['POST', '/api/auth/login', { public: true }, async ({ req, res, body }) =>
       startSession(req, res, await auth.login(body.username, body.password))],
     ['POST', '/api/auth/logout', { public: true }, ({ req, res, token }) => {
+      notifications?.removeSession(token);
       auth.logout(token);
       setCookie(req, res, '', 0);
       return { ok: true };
     }],
     ['GET', '/api/auth/me', {}, ({ user }) => user],
+    ...(notifications ? [
+      ['GET', '/api/notifications', { session: true }, ({ token }) => notifications.get(token)],
+      ['PUT', '/api/notifications', { session: true }, ({ token, user, body }) => notifications.update(token, user, body)],
+      ['DELETE', '/api/notifications', { session: true }, ({ token }) => { notifications.removeSession(token); }],
+    ] : []),
+    ...(approval ? [
+      ['GET', '/api/auth/passkeys', { session: true }, ({ user }) => approval.keys(user)],
+      ['POST', '/api/auth/passkeys/options', { session: true }, ({ req, token, user, body }) =>
+        approval.beginRegistration(req, token, user, body.password)],
+      ['POST', '/api/auth/passkeys', { session: true }, ({ token, user, body }) => approval.register(token, user, body)],
+      ['POST', '/api/auth/passkeys/remove', { session: true }, ({ user, body }) => approval.remove(user, body.id, body.password)],
+    ] : []),
     ['GET', '/api/auth/tokens', {}, ({ user }) => auth.listAccessTokens(user.id)],
     ['POST', '/api/auth/tokens', { status: 201 }, ({ user, body }) => auth.createAccessToken(user.id, body.name)],
     ['DELETE', '/api/auth/tokens/:id', {}, ({ user, params }) => {
@@ -104,22 +135,49 @@ export function createApiHandler({ registry, auth, pages, actions, engine, aiSet
       return device;
     }],
     ['GET', '/api/devices/:id/history', { permission: PERMISSIONS.DEVICES_READ }, ({ params, user, url }) => {
-      const device = devicesFor(user).get(params.id);
-      if (!device) throw new HttpError(404, 'Unknown device');
-      const property = url.searchParams.get('property');
-      if (!device.capabilities.some((cap) => cap.property === property && cap.readable && cap.type === 'numeric')) {
-        throw new HttpError(400, 'Choose a readable numeric device property');
-      }
-      return { points: registry.history(device.id, property) };
+      const device = findDevice(user, params.id);
+      const property = numericProperty(device, url.searchParams.get('property'));
+      const range = url.searchParams.get('range') ?? '24h';
+      if (!Object.hasOwn(HISTORY_RANGES, range)) throw new HttpError(400, 'Choose 2h, 24h, 30d or all');
+      return { points: registry.history(device.id, property, range), ...historySelection?.get(device.id, property) };
+    }],
+    ...(historySelection ? [
+      ['PUT', '/api/devices/:id/history', { permission: PERMISSIONS.CONFIG_WRITE }, ({ params, user, body }) => {
+        const device = findDevice(user, params.id);
+        const property = numericProperty(device, body.property);
+        if (typeof body.enabled !== 'boolean') throw new HttpError(400, 'enabled must be true or false');
+        return historySelection.update(device.id, property, body.enabled);
+      }],
+    ] : []),
+    ['GET', '/api/devices/:id/activity', { permission: PERMISSIONS.DEVICES_READ }, ({ params, user, url }) => {
+      const device = findDevice(user, params.id);
+      const before = Number(url.searchParams.get('before') ?? Number.MAX_SAFE_INTEGER);
+      if (!Number.isSafeInteger(before) || before < 1) throw new HttpError(400, 'Invalid activity cursor');
+      const control = can(user, PERMISSIONS.DEVICES_CONTROL) && device.access !== 'view';
+      const events = registry.deviceHistory.activity(device.id, before).map((event) =>
+        event.kind === 'command' && !control ? { ...event, value: null } : event);
+      return { events };
     }],
     ['POST', '/api/devices/:id/set', { permission: PERMISSIONS.DEVICES_CONTROL, status: 202 }, ({ params, body, user }) =>
       devicesFor(user).command(params.id, body)],
+    ...(registry.timers ? [
+      ['GET', '/api/timers', { permission: PERMISSIONS.DEVICES_READ }, ({ user }) =>
+        registry.timers.list().filter((timer) => devicesFor(user).get(timer.deviceId)).map(publicTimer)],
+      ['POST', '/api/devices/:id/timed', { permission: PERMISSIONS.DEVICES_CONTROL, status: 202 }, ({ params, body, user }) =>
+        devicesFor(user).command(params.id, body.values, body.timer ?? {})],
+      ['PATCH', '/api/devices/:id/timer', { permission: PERMISSIONS.DEVICES_CONTROL }, async ({ params, body, user }) => {
+        const device = findDevice(user, params.id);
+        const scoped = devicesFor(user);
+        const timer = await registry.timers.update(device, body.seconds, (values) => scoped.check?.(device.id, values));
+        return { timer: publicTimer(timer) };
+      }],
+    ] : []),
     ['GET', '/api/events', { permission: PERMISSIONS.DEVICES_READ, raw: true }, ({ req, res, user }) =>
       streamEvents(req, res, { registry, pages, actions, engine, floorplan, access, user })],
 
     ...(floorplan ? [
       ['GET', '/api/floorplan', { permission: PERMISSIONS.DEVICES_READ }, ({ user }) => floorplanFor(user, floorplan.get())],
-      ['PUT', '/api/floorplan', { permission: PERMISSIONS.CONFIG_WRITE }, ({ body, user }) => {
+      ['PUT', '/api/floorplan', { permission: PERMISSIONS.CONFIG_WRITE, maxBody: 512 * 1024 }, ({ body, user }) => {
         const plan = normalizeFloorplan(body);
         const errors = checkPlacementSettings(plan, floorplan.get(), {
           registry: devicesFor(user), lookupAction: (id) => actions?.get(id),
@@ -133,7 +191,7 @@ export function createApiHandler({ registry, auth, pages, actions, engine, aiSet
       ...crudRoutes('pages', pages, 'page'),
       ['PUT', '/api/pages/order', { permission: PERMISSIONS.CONFIG_WRITE }, ({ body }) => pages.reorder(body.ids)],
     ] : []),
-    ...(actions ? crudRoutes('actions', actions, 'action') : []),
+    ...(actions ? crudRoutes('actions', actions, 'action', checkActionWrite) : []),
     ...(pages && actions ? [
       ['GET', '/api/ai/context', { permission: PERMISSIONS.DEVICES_READ, raw: true }, ({ res, user }) => {
         res.writeHead(200, {
@@ -171,11 +229,27 @@ export function createApiHandler({ registry, auth, pages, actions, engine, aiSet
         return { ok: true };
       }],
     ] : []),
-    ...(engine ? [['POST', '/api/actions/:id/run', { permission: PERMISSIONS.DEVICES_CONTROL }, ({ params, user }) => {
-      const scoped = devicesFor(user);
-      if (scoped.check) engine.preflight(params.id, scoped.check);
-      return engine.run(params.id, { by: `user:${user.username}` });
-    }]] : []),
+    ...(engine ? [
+      ...(approval ? [['POST', '/api/actions/:id/approval', { permission: PERMISSIONS.DEVICES_CONTROL, session: true },
+        ({ req, params, user, token }) => {
+          const action = actions.get(params.id);
+          if (!action) throw new HttpError(404, 'Unknown action');
+          const scoped = devicesFor(user);
+          if (scoped.check) engine.preflight(params.id, scoped.check);
+          return approval.beginAction(req, token, user, action);
+        }]] : []),
+      ['POST', '/api/actions/:id/run', { permission: PERMISSIONS.DEVICES_CONTROL }, async ({ params, user, token, body, fromCookie }) => {
+        const action = actions?.get(params.id);
+        const scoped = devicesFor(user);
+        if (scoped.check) engine.preflight(params.id, scoped.check);
+        let approved;
+        if (action?.security && action.security !== 'none') {
+          if (!approval || !fromCookie) throw new HttpError(403, 'Approve this action in HomeyVibe');
+          if (await approval.approve(token, user, action, body)) approved = JSON.stringify(action);
+        }
+        return engine.run(params.id, { by: `user:${user.username}`, approved });
+      }],
+    ] : []),
     ...(access ? [
       ['GET', '/api/access', { permission: PERMISSIONS.USERS_MANAGE }, () => access.all()],
       ['PUT', '/api/access/ai', { permission: PERMISSIONS.USERS_MANAGE }, ({ body }) => access.setAi(body)],
@@ -216,12 +290,15 @@ export function createApiHandler({ registry, auth, pages, actions, engine, aiSet
       const user = auth.authenticate(token);
       if (!route.opts.public) {
         if (!user) throw new HttpError(401, 'Sign in required');
+        if (route.opts.session && (!fromCookie || !auth.isSession(token))) {
+          throw new HttpError(403, 'Use a signed-in HomeyVibe browser session');
+        }
         if (route.opts.permission && !can(user, route.opts.permission)) throw new HttpError(403, 'Forbidden');
       }
       if (req.method !== 'GET' && fromCookie) checkSameOrigin(req);
 
-      const body = ['POST', 'PATCH', 'PUT'].includes(req.method) ? await readJson(req) : undefined;
-      const result = await route.handler({ req, res, params, body, user, token, url });
+      const body = ['POST', 'PATCH', 'PUT'].includes(req.method) ? await readJson(req, route.opts.maxBody) : undefined;
+      const result = await route.handler({ req, res, params, body, user, token, url, fromCookie: fromCookie && auth.isSession(token) });
       if (route.opts.raw) return;
       send(res, route.opts.status ?? 200, result ?? { ok: true });
     } catch (err) {
@@ -237,7 +314,7 @@ export function createApiHandler({ registry, auth, pages, actions, engine, aiSet
 // ---- routing -------------------------------------------------------------------
 
 /** Standard list/get/create/update/delete routes for a config collection. */
-function crudRoutes(name, collection, noun) {
+function crudRoutes(name, collection, noun, checkWrite = () => {}) {
   const get = ({ params }) => {
     const item = collection.get(params.id);
     if (!item) throw new HttpError(404, `Unknown ${noun}`);
@@ -246,10 +323,17 @@ function crudRoutes(name, collection, noun) {
   return [
     ['GET', `/api/${name}`, { permission: PERMISSIONS.DEVICES_READ }, () => collection.list()],
     ['GET', `/api/${name}/:id`, { permission: PERMISSIONS.DEVICES_READ }, get],
-    ['POST', `/api/${name}`, { permission: PERMISSIONS.CONFIG_WRITE, status: 201 }, ({ body }) => collection.create(body)],
-    ['PATCH', `/api/${name}/:id`, { permission: PERMISSIONS.CONFIG_WRITE }, ({ params, body }) => collection.update(params.id, body)],
-    ['DELETE', `/api/${name}/:id`, { permission: PERMISSIONS.CONFIG_WRITE }, ({ params }) => {
-      collection.delete(params.id);
+    ['POST', `/api/${name}`, { permission: PERMISSIONS.CONFIG_WRITE, status: 201 }, (context) => {
+      checkWrite(context);
+      return collection.create(context.body);
+    }],
+    ['PATCH', `/api/${name}/:id`, { permission: PERMISSIONS.CONFIG_WRITE }, (context) => {
+      checkWrite(context);
+      return collection.update(context.params.id, context.body);
+    }],
+    ['DELETE', `/api/${name}/:id`, { permission: PERMISSIONS.CONFIG_WRITE }, (context) => {
+      checkWrite(context);
+      collection.delete(context.params.id);
       return { ok: true };
     }],
   ];
@@ -297,7 +381,8 @@ function startSession(req, res, { token, user }) {
 }
 
 function setCookie(req, res, value, maxAge) {
-  const secure = req.socket.encrypted || req.headers['x-forwarded-proto'] === 'https';
+  const secure = req.socket.encrypted || req.headers['x-forwarded-proto'] === 'https' ||
+    req.headers.origin === `https://${req.headers['x-forwarded-host'] ?? req.headers.host}`;
   res.setHeader(
     'set-cookie',
     `${COOKIE}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure ? '; Secure' : ''}`,
@@ -380,6 +465,10 @@ function streamEvents(req, res, { registry, pages, actions, engine, floorplan, a
   const onPages = () => emit('pages', pages.list());
   const onActions = () => emit('actions', actions.list());
   const onRun = (result) => emit('run', result);
+  const onTimer = (id, timer) => {
+    if (!policy || policy.canSee(id)) emit('timer', { deviceId: id, timer: publicTimer(timer) });
+  };
+  registry.on('timer', onTimer);
   const onFloorplan = (plan) => emit('floorplan', visibleFloorplan(plan, policy, can(user, PERMISSIONS.DEVICES_CONTROL)));
   floorplan?.on('changed', onFloorplan);
   pages?.on('changed', onPages);
@@ -393,6 +482,7 @@ function streamEvents(req, res, { registry, pages, actions, engine, floorplan, a
     registry.off('device:updated', onDevice);
     registry.off('device:removed', onRemoved);
     registry.off('state', onState);
+    registry.off('timer', onTimer);
     pages?.off('changed', onPages);
     actions?.off('changed', onActions);
     engine?.off('run', onRun);
@@ -406,13 +496,17 @@ function send(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
-async function readJson(req) {
+function publicTimer(timer) {
+  return timer ? { deviceId: timer.deviceId, expiresAt: timer.expiresAt, retrying: Boolean(timer.retryAt) } : null;
+}
+
+async function readJson(req, maxBody = MAX_BODY) {
   const type = req.headers['content-type'] ?? '';
   let size = 0;
   const chunks = [];
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > MAX_BODY) throw new HttpError(413, 'Body too large');
+    if (size > maxBody) throw new HttpError(413, 'Body too large');
     chunks.push(chunk);
   }
   const text = Buffer.concat(chunks).toString();

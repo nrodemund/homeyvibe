@@ -40,6 +40,9 @@ export function importConfig({ bundle, pages, actions, registry, floorplan = nul
   const normalizedActions = [];
   for (const [i, raw] of withIds(actionList, 'name').entries()) {
     try {
+      if ([raw.security, actions.get(raw.id)?.security].some((security) => security && security !== 'none')) {
+        throw new HttpError(403, 'Manage protected actions in the HomeyVibe Actions editor');
+      }
       normalizedActions.push(normalizeAction(raw));
     } catch (err) {
       errors.push(`actions[${i}]: ${err.message}`);
@@ -85,10 +88,12 @@ export function importConfig({ bundle, pages, actions, registry, floorplan = nul
         const path = `actions[${i}].steps[${j}]`;
         const before = errors.length;
         checkDevice(path, s.deviceId, Object.keys(s.values), s.values);
+        if (s.timer) checkDevice(`${path}.timer`, s.deviceId, Object.keys(s.timer.values), s.timer.values);
         // A limited importer (the AI) may not write actions that go beyond its own limits.
         if (registry.check && errors.length === before) {
           try {
             registry.check(s.deviceId, s.values);
+            if (s.timer) registry.check(s.deviceId, s.timer.values);
           } catch (err) {
             errors.push(`${path}: ${err.message}`);
           }

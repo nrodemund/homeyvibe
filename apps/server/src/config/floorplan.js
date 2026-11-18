@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { Validator, ID_RE, slugify } from './validate.js';
 import { placementSettings, roomSettings } from './floorplan-settings.js';
+import { OBJECT_TYPES } from '../../../../packages/shared/src/objects.js';
 
 /**
  * The home's floor plan, shared by every 3D page. Coordinates are meters seen from above:
@@ -41,6 +42,7 @@ export function normalizeFloorplan(input) {
   }
   const rooms = input.rooms ?? [];
   const devices = input.devices ?? [];
+  const objects = input.objects ?? [];
   const coord = (n) => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) <= MAX_COORD;
 
   const roomIds = new Set();
@@ -84,6 +86,25 @@ export function normalizeFloorplan(input) {
       deviceExtras[i] = placementSettings(d, path, v);
     });
   }
+  const objectIds = new Set();
+  if (v.array(objects, 'objects', { max: 500 })) {
+    objects.forEach((object, i) => {
+      const path = `objects[${i}]`;
+      if (!v.check(object && typeof object === 'object' && !Array.isArray(object), `${path} must be an object`)) return;
+      v.check(typeof object.id === 'string' && ID_RE.test(object.id) && !objectIds.has(object.id), `${path}.id must be unique`);
+      objectIds.add(object.id);
+      v.check(OBJECT_TYPES.has(object.type), `${path}.type must be a catalog object`);
+      v.string(object.name, `${path}.name`, { optional: true, max: 80 });
+      v.check(Number.isInteger(object.floor) && Math.abs(object.floor) <= 50, `${path}.floor must be a whole number`);
+      v.check(object.roomId == null || roomIds.has(object.roomId), `${path}.roomId must refer to a room`);
+      v.check(Array.isArray(object.position) && object.position.length === 3 && object.position.every(coord) &&
+        object.position[1] >= 0, `${path}.position must be [x, height, z]`);
+      v.check(Array.isArray(object.size) && object.size.length === 3 &&
+        object.size.every((n) => Number.isFinite(n) && n >= .01 && n <= 30), `${path}.size must contain dimensions from 0.01 to 30 m`);
+      v.check(Number.isFinite(object.rotation), `${path}.rotation must be a finite angle`);
+      v.check(typeof object.color === 'string' && /^#[\da-f]{6}$/i.test(object.color), `${path}.color must be a hex color`);
+    });
+  }
   v.throwIfInvalid();
 
   const round = (n) => Math.round(n * 1000) / 1000;
@@ -96,6 +117,10 @@ export function normalizeFloorplan(input) {
       points: r.points.map(([x, z]) => [round(x), round(z)]),
       ...roomExtras[i],
     })),
+    ...(input.objects !== undefined ? { objects: objects.map((o) => ({
+      id: o.id, type: o.type, name: o.name?.trim() ?? OBJECT_TYPES.get(o.type).name, floor: o.floor, roomId: o.roomId ?? null,
+      position: o.position.map(round), size: o.size.map(round), rotation: ((o.rotation % 360) + 360) % 360, color: o.color,
+    })) } : {}),
     devices: devices.map((d, i) => ({
       deviceId: d.deviceId,
       roomId: d.roomId ?? null,

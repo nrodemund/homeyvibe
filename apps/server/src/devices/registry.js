@@ -13,7 +13,10 @@ import { DeviceHistory } from './history.js';
 export class DeviceRegistry extends EventEmitter {
   #devices = new Map();
   #providers = new Map();
-  #history = new DeviceHistory();
+  constructor({ history = new DeviceHistory() } = {}) {
+    super();
+    this.deviceHistory = history;
+  }
 
   registerProvider(provider) {
     this.#providers.set(provider.id, provider);
@@ -33,7 +36,7 @@ export class DeviceRegistry extends EventEmitter {
       ? { ...existing, ...device, state: existing.state }
       : { state: {}, available: true, ...device };
     this.#devices.set(device.id, merged);
-    if (!existing) this.#history.record(merged, merged.state);
+    if (!existing) this.recordHistory(() => this.deviceHistory.record(merged, merged.state, {}, { retained: true }));
     this.emit(existing ? 'device:updated' : 'device:added', merged);
     return merged;
   }
@@ -55,13 +58,20 @@ export class DeviceRegistry extends EventEmitter {
   updateState(id, changes, metadata) {
     const device = this.#devices.get(id);
     if (!device) return;
-    device.state = { ...device.state, ...changes };
-    this.#history.record(device, changes);
+    const previous = device.state;
+    device.state = { ...previous, ...changes };
+    this.recordHistory(() => this.deviceHistory.record(device, changes, previous, {
+      ...metadata, onActivity: (event) => this.emit('activity', device, event),
+    }));
     this.emit('state', device, changes, metadata);
   }
 
-  history(id, property) {
-    return this.#history.get(id, property);
+  history(id, property, range) {
+    return this.deviceHistory.get(id, property, range);
+  }
+
+  recordHistory(write) {
+    try { write(); } catch (err) { console.error('Could not record device history:', err.message); }
   }
 
   setAvailable(id, available) {
@@ -72,12 +82,23 @@ export class DeviceRegistry extends EventEmitter {
   }
 
   /** Send a command to a device through its provider. Throws on invalid input. */
-  async command(id, values) {
+  async command(id, values, timer) {
+    if (this.timers) return this.timers.command(id, values, timer);
+    if (timer) throw new HttpError(503, 'Device timers are unavailable');
+    return this.sendCommand(id, values);
+  }
+
+  async sendCommand(id, values) {
     const device = this.#devices.get(id);
     if (!device) throw new HttpError(404, `Unknown device ${id}`);
     const provider = this.#providers.get(device.provider);
     if (!provider) throw new HttpError(500, `Provider ${device.provider} not loaded`);
-    return provider.command(device, values);
+    const result = await provider.command(device, values);
+    this.recordHistory(() => {
+      this.deviceHistory.event(id, 'command', null, values);
+      this.emit('activity', device, { kind: 'command', property: null });
+    });
+    return result;
   }
 }
 

@@ -7,7 +7,8 @@ import { describeDevice, FORMAT_GUIDE } from './context.js';
 import { importConfig } from './importer.js';
 import { scopedRegistry } from '../auth/access.js';
 import { visibleFloorplan } from '../config/floorplan-settings.js';
-import { DISPLAYS } from '../../../../packages/shared/src/floorplan.js';
+import { CHART_RANGES, DISPLAYS } from '../../../../packages/shared/src/floorplan.js';
+import { OBJECT_TYPES } from '../../../../packages/shared/src/objects.js';
 
 /** Shared guidance for any model using these tools (MCP instructions, in-app chat system prompt). */
 export const TOOL_GUIDE = `HomeyVibe is a smart home server. You can look at the devices it found, control them, and configure dashboard pages and actions (scenes and automations).
@@ -38,8 +39,10 @@ export const pageSchema = z.object({
   })),
 });
 
+const timerSchema = z.object({ seconds: z.number().int().min(1).max(604800), values: z.record(z.string(), z.any()) });
 const stepSchema = z.union([
-  z.object({ type: z.literal('set'), deviceId: z.string(), values: z.record(z.string(), z.any()).describe('{ property: value }') }),
+  z.object({ type: z.literal('set'), deviceId: z.string(), values: z.record(z.string(), z.any()).describe('{ property: value }'),
+    timer: timerSchema.optional() }),
   z.object({ type: z.literal('delay'), seconds: z.number().positive().max(3600) }),
   z.object({ type: z.literal('run'), actionId: z.string() }),
 ]);
@@ -61,13 +64,20 @@ const optionalNumber = z.number().optional();
 const optionalColor = z.string().regex(/^#[\da-f]{6}$/i).optional();
 const clickSchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('details') }),
-  z.object({ mode: z.literal('command'), values: z.record(z.string(), z.any()) }),
+  z.object({ mode: z.literal('command'), values: z.record(z.string(), z.any()), timer: timerSchema.optional() }),
   z.object({ mode: z.literal('action'), actionId: z.string() }),
   z.object({ mode: z.literal('message'), message: z.string() }),
+  z.object({ mode: z.literal('chart'), property: z.string(), range: z.enum(Object.keys(CHART_RANGES)).optional(),
+    min: optionalNumber, max: optionalNumber }),
   z.object({ mode: z.literal('none') }),
 ]);
 
 export const floorplanSchema = z.object({
+  objects: z.array(z.object({
+    id: z.string(), type: z.enum([...OBJECT_TYPES.keys()]), name: z.string().optional(), floor: z.number().int(),
+    roomId: z.string().nullable().optional(), position: z.array(z.number()).length(3), size: z.array(z.number()).length(3),
+    rotation: z.number(), color: z.string(),
+  })).optional(),
   rooms: z.array(z.object({
     id: z.string().optional().describe('Generated from name if omitted'),
     name: z.string(),
@@ -86,6 +96,7 @@ export const floorplanSchema = z.object({
   })),
   devices: z.array(z.object({
     deviceId: z.string(),
+    hidden: z.boolean().optional(),
     roomId: z.string().nullable().optional(),
     position: z.array(z.number()).length(3).describe('[x, height, z] in meters'),
     display: z.object({
@@ -102,6 +113,7 @@ export const actionSchema = z.object({
   name: z.string(),
   description: z.string().optional(),
   enabled: z.boolean().optional(),
+  security: z.enum(['none', 'confirm', 'passkey']).optional(),
   steps: z.array(stepSchema).min(1),
   triggers: z.array(triggerSchema).optional(),
 });
@@ -248,6 +260,8 @@ export function homeTools({ user: person, registry: fullRegistry, pages, actions
       annotations: { destructiveHint: true },
       permission: PERMISSIONS.CONFIG_WRITE,
       run: ({ actionId }) => {
+        const action = actions.get(actionId);
+        if (action?.security && action.security !== 'none') throw new HttpError(403, 'Manage protected actions in HomeyVibe');
         const usedBy = pages.list().filter((p) => p.sections.some((s) => s.items.some((i) => i.type === 'action' && i.actionId === actionId)));
         actions.delete(actionId);
         return usedBy.length

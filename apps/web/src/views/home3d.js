@@ -12,6 +12,11 @@ import { arrangeMarkers, markerReading, mergeHistory } from '../floorplan-visual
 import { placementEditor, roomEditor } from './scene-editor.js';
 import { addWalls } from './scene-walls.js';
 import { HIGH_COLOR, LOW_COLOR, renderMarker } from './scene-markers.js';
+import { openDeviceHistory } from './device-history.js';
+import { makeObject, openObjectBrowser } from './scene-objects.js';
+import { moveRoomGeometry, removeRoomCorner, splitRoomWall } from '../room-edits.js';
+import { field } from './auth.js';
+import { openTimer, timerLabel } from './device-timer.js';
 
 const CLICK_SLOP_PX = 6;
 const FALLBACK_DISPLAY = { mode: 'auto' };
@@ -33,7 +38,7 @@ const FALLBACK_DISPLAY = { mode: 'auto' };
  */
 export function createHome3d({
   plan, devices, deviceIds, hints = new Map(), canEdit, canControl, renderCard, onSave,
-  listActions, fetchHistory, sendCommand, runAction,
+  listActions, fetchHistory, sendCommand, runAction, timers = new Map(),
 }) {
   const canvasWrap = h('div.stage-canvas');
   const toolbar = h('div.stage-toolbar');
@@ -46,7 +51,7 @@ export function createHome3d({
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   } catch {
     el.replaceChildren(h('p.empty', {}, 'The 3D view needs WebGL, which this browser does not offer. Switch the page layout to grid to see these devices.'));
-    return { el, update() {}, setPlan() {}, setDevices() {}, destroy() {} };
+    return { el, update() {}, refreshTimer() {}, setPlan() {}, setDevices() {}, destroy() {} };
   }
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   canvasWrap.append(renderer.domElement);
@@ -78,6 +83,9 @@ export function createHome3d({
   let colors = null;
   const deviceObjects = new Map();
   const roomMeshes = new Map();
+  const propMeshes = new Map();
+  const undo = [];
+  let roomHandle = null;
   const history = new Map();
   const busy = new Set();
   let preview = null;
@@ -89,7 +97,8 @@ export function createHome3d({
 
   function shownDevices() {
     const ids = deviceIds ?? current().devices.map((d) => d.deviceId);
-    return ids.map((id) => devices.get(id)).filter(Boolean);
+    const hidden = new Set(current().devices.filter((entry) => entry.hidden).map((entry) => entry.deviceId));
+    return ids.filter((id) => !hidden.has(id)).map((id) => devices.get(id)).filter(Boolean);
   }
 
   function placements() {
@@ -126,6 +135,7 @@ export function createHome3d({
     world.clear();
     deviceObjects.clear();
     roomMeshes.clear();
+    propMeshes.clear();
   }
 
   function build(renderEditor = true) {
@@ -160,7 +170,19 @@ export function createHome3d({
       world.add(label);
     }
 
-    addWalls(world, rooms, colors, editing() && selected?.type === 'room' ? selected.id : null);
+    addWalls(world, rooms, colors);
+    for (const object of current().objects ?? []) {
+      if (object.floor !== floor) continue;
+      const mesh = makeObject(object);
+      for (const part of mesh.children) part.userData.objectId = object.id;
+      world.add(mesh);
+      propMeshes.set(object.id, mesh);
+      if (selected?.type === 'object' && selected.id === object.id) world.add(new THREE.BoxHelper(mesh, colors.accent));
+    }
+    if (editing() && selected?.type === 'room') {
+      const room = rooms.find((r) => r.id === selected.id);
+      if (room) addRoomHandles(room);
+    }
 
     if (editing()) {
       const b = bounds(rooms);
@@ -248,13 +270,14 @@ export function createHome3d({
     labelButton.classList.toggle('on', level !== null && level > 0);
     const mode = placement?.click?.mode ?? 'details';
     labelButton.title = editing() ? 'Edit device' : ({
-      details: 'Open full device card', command: 'Send device command',
+      details: 'Open full device card', command: 'Send device command', chart: 'Open chart',
       action: 'Run saved action', message: 'Show a message', none: 'Device reading',
     })[mode];
     entry.details.hidden = editing() || mode === 'details';
     labelButton.setAttribute('aria-busy', String(busy.has(device.id)));
     const points = ['chart', 'trend'].includes(display.mode) ? readingHistory(device, display, changes) : [];
     const { fraction, active } = renderMarker(labelButton, device, entry.kind, display, points);
+    refreshTimer(device.id);
     material.color.copy(device.available === false ? colors.muted : colors.accent);
     material.emissive.set(0x000000);
     material.emissiveIntensity = 0;
@@ -325,6 +348,7 @@ export function createHome3d({
     if (editing() || !click || click.mode === 'details') return select({ type: 'device', id });
     if (click.mode === 'none') return;
     if (click.mode === 'message') return toast(click.message);
+    if (click.mode === 'chart') return openDeviceHistory(device, canEdit, click);
     if (!canControl || device.access === 'view') return select({ type: 'device', id });
     if (busy.has(id)) return;
     busy.add(id);
@@ -332,11 +356,11 @@ export function createHome3d({
     try {
       if (click.mode === 'command') {
         if (device.available === false) throw new Error(`${device.name} is offline`);
-        await sendCommand(id, click.values);
+        await sendCommand(id, click.values, click.timer);
         toast(`Command sent to ${device.name}`);
       } else if (click.mode === 'action') {
         const result = await runAction(click.actionId);
-        if (result.ok) toast(`Ran ${listActions().find((action) => action.id === click.actionId)?.name ?? click.actionId}`);
+        if (result?.ok) toast(`Ran ${listActions().find((action) => action.id === click.actionId)?.name ?? click.actionId}`);
       }
     } catch (err) {
       toast(err.message);
@@ -371,6 +395,19 @@ export function createHome3d({
     controls.update();
     fitted = true;
     requestRender();
+  }
+
+  function refreshTimer(id) {
+    const button = deviceObjects.get(id)?.labelButton;
+    if (!button) return;
+    const timer = timers.get(id);
+    const span = button.querySelector('.marker-timer');
+    if (!timer) {
+      if (span) { span.remove(); requestRender(); }
+      return;
+    }
+    if (span) span.textContent = timerLabel(timer);
+    else { button.append(h('span.marker-timer', {}, timerLabel(timer))); requestRender(); }
   }
 
   // ---- rendering --------------------------------------------------------------------------
@@ -451,15 +488,42 @@ export function createHome3d({
     return raycaster.intersectObjects([...roomMeshes.values()])[0]?.object.userData.roomId ?? null;
   }
 
-  function onPointerDown(e, labelDeviceId = null) {
+  function pickObject(e) {
+    raycaster.setFromCamera(ndc(e), camera);
+    return raycaster.intersectObjects([...propMeshes.values()], true)[0]?.object.userData.objectId ?? null;
+  }
+
+  function sceneTarget(e) {
+    const deviceId = e.target.closest?.('[data-device-id]')?.dataset.deviceId ?? pickDevice(e);
+    if (deviceId) return { type: 'device', id: deviceId };
+    const object = pickObject(e);
+    if (object) return { type: 'object', id: object };
+    const room = pickRoom(e);
+    return room ? { type: 'room', id: room } : null;
+  }
+
+  function onPointerDown(e, labelDeviceId = null, handle = null) {
     if (e.button !== 0 || gesture) return;
-    const deviceId = labelDeviceId ?? pickDevice(e);
-    gesture = { pointerId: e.pointerId, x: e.clientX, y: e.clientY, deviceId, moved: false, kind: 'click' };
-    if (editing() && deviceId) gesture.kind = 'drag';
+    const target = handle ? { type: 'room', id: handle.id } : labelDeviceId ? { type: 'device', id: labelDeviceId } : sceneTarget(e);
+    const deviceId = target?.type === 'device' ? target.id : null;
+    gesture = { pointerId: e.pointerId, x: e.clientX, y: e.clientY, deviceId, target, moved: false, kind: 'click' };
+    const start = groundPoint(e);
+    if (editing() && start && handle) {
+      roomHandle = handle;
+      Object.assign(gesture, { kind: 'reshape', handle, start, original: structuredClone(draft) });
+    } else if (editing() && start && target && ['device', 'object'].includes(target.type)) {
+      const placement = target.type === 'device' ? placementOf(deviceId) : draft.objects.find((o) => o.id === target.id);
+      if (placement) Object.assign(gesture, { kind: 'drag', placement, start, position: [...placement.position], original: structuredClone(draft) });
+    }
     else if (editing() && mode === 'draw') {
       const p = groundPoint(e);
       if (p) gesture = { ...gesture, kind: 'draw', start: [snap(p.x, 0.25), snap(p.z, 0.25)] };
     }
+    if (target && !handle && e.pointerType !== 'mouse') gesture.timer = setTimeout(() => {
+      if (!gesture || gesture.moved) return;
+      gesture.long = true;
+      openContext(target);
+    }, 550);
     if (gesture.kind !== 'click') {
       controls.enabled = false;
       e.preventDefault();
@@ -477,12 +541,18 @@ export function createHome3d({
     const p = groundPoint(e);
     if (!p) return;
     if (gesture.kind === 'drag') {
-      const entry = deviceObjects.get(gesture.deviceId);
-      const placement = draft?.devices.find((d) => d.deviceId === gesture.deviceId);
-      if (!entry || !placement) return;
-      placement.position = [snap(p.x, 0.05), placement.position[1], snap(p.z, 0.05)];
-      entry.group.position.set(placement.position[0], 0, placement.position[2]);
+      const { target, position, start, placement } = gesture;
+      placement.position = [snap(position[0] + p.x - start.x, .05), position[1], snap(position[2] + p.z - start.z, .05)];
+      const mesh = target.type === 'device' ? deviceObjects.get(target.id)?.group : propMeshes.get(target.id);
+      mesh?.position.set(placement.position[0], target.type === 'device' ? 0 : position[1], placement.position[2]);
       requestRender();
+    } else if (gesture.kind === 'reshape') {
+      const { original, handle, start } = gesture;
+      try {
+        draft = moveRoomGeometry(original, handle.id, handle.type, handle.index, [snap(p.x - start.x, .05), snap(p.z - start.z, .05)]);
+        gesture.changed = true;
+        build(false);
+      } catch { /* keep the latest valid shape while dragging */ }
     } else if (gesture.kind === 'draw') {
       gesture.end = [snap(p.x, 0.25), snap(p.z, 0.25)];
       drawPreview(gesture.start, gesture.end);
@@ -495,24 +565,32 @@ export function createHome3d({
     window.removeEventListener('pointercancel', onPointerCancel);
     controls.enabled = true;
     const g = gesture;
+    clearTimeout(g?.timer);
     gesture = null;
     return g;
   }
 
   function onPointerCancel(e) {
     if (gesture?.pointerId !== e.pointerId) return;
-    stopGesture();
+    const g = stopGesture();
+    if (g?.original) { draft = g.original; build(); }
     clearPreview();
   }
 
   function onPointerUp(e) {
     if (gesture?.pointerId !== e.pointerId) return;
     const g = stopGesture();
+    if (g.long) return;
+    if (g.kind === 'reshape') {
+      if (g.changed) remember(g.original);
+      select(g.target);
+      return;
+    }
     if (g.kind === 'drag' && g.moved) {
-      const placement = draft?.devices.find((d) => d.deviceId === g.deviceId);
-      if (!placement) return;
+      const { placement } = g;
+      remember(g.original);
       placement.roomId = roomAt(draft, placement.position[0], placement.position[2], floor)?.id ?? null;
-      select({ type: 'device', id: g.deviceId });
+      select(g.target);
       return;
     }
     if (g.kind === 'draw') {
@@ -522,15 +600,83 @@ export function createHome3d({
     }
     if (g.moved) return; // the camera was dragged
     if (g.deviceId) activate(g.deviceId);
-    else if (editing()) {
-      const roomId = pickRoom(e);
-      select(roomId ? { type: 'room', id: roomId } : null);
-    } else select(null);
+    else if (editing() || g.target?.type === 'object') select(g.target);
+    else select(null);
   }
 
   canvasWrap.addEventListener('pointerdown', (e) => {
     if (e.target === renderer.domElement) onPointerDown(e);
   }, { capture: true });
+  canvasWrap.addEventListener('contextmenu', (e) => {
+    const handle = e.target.closest?.('[data-handle-index]');
+    if (handle && selected?.type === 'room') {
+      e.preventDefault();
+      roomHandle = { id: selected.id, type: handle.dataset.handleType, index: Number(handle.dataset.handleIndex) };
+      renderPanel();
+      return;
+    }
+    const target = sceneTarget(e);
+    if (target) { e.preventDefault(); if (!gesture?.long) openContext(target); }
+  });
+
+  function addRoomHandles(room) {
+    function handle(type, index, x, z, label) {
+      const value = { id: room.id, type, index };
+      const button = h(`button.scene-handle.${type}`, {
+        type: 'button', 'aria-label': label, title: label,
+        dataset: { handleType: type, handleIndex: index },
+        onpointerdown: (e) => onPointerDown(e, null, value),
+        onclick: (e) => { if (e.detail === 0) { roomHandle = value; renderPanel(); } },
+      }, type === 'corner' ? '●' : type === 'wall' ? String(index + 1) : '↔');
+      const item = new CSS2DObject(button);
+      item.position.set(x, .24, z);
+      world.add(item);
+    }
+    room.points.forEach(([x, z], i) => {
+      const [nextX, nextZ] = room.points[(i + 1) % room.points.length];
+      handle('corner', i, x, z, `Move corner ${i + 1}`);
+      handle('wall', i, (x + nextX) / 2, (z + nextZ) / 2, `Move wall ${i + 1}`);
+    });
+    const [x, z] = centroid(room.points);
+    handle('room', 0, x, z, 'Move whole room');
+  }
+
+  function remember(previous = structuredClone(draft)) {
+    undo.push(previous);
+    if (undo.length > 20) undo.shift();
+  }
+
+  function changeGeometry(transform, keepHandle = false) {
+    try {
+      const next = transform(draft);
+      remember();
+      draft = next;
+      if (!keepHandle) roomHandle = null;
+      build();
+    } catch (err) { toast(err.message); }
+  }
+
+  function openContext(target) {
+    if (document.querySelector('.scene-context[open]')) return;
+    const device = target.type === 'device' ? devices.get(target.id) : null;
+    const entry = target.type === 'room' ? current().rooms.find((r) => r.id === target.id)
+      : current().objects?.find((o) => o.id === target.id);
+    const close = () => dialog.close();
+    const option = (label, run) => h('button', { type: 'button', onclick: () => { close(); run(); } }, label);
+    const dialog = h('dialog.panel.scene-context', { 'aria-label': `${(device ?? entry)?.name ?? 'Object'} options` },
+      h('header', {}, h('h2', {}, (device ?? entry)?.name ?? 'Object'), option('Close', () => {})),
+      h('div.settings-fields', {},
+        option('Details', () => select(target)),
+        device ? option('Activity and charts', () => openDeviceHistory(device, canEdit)) : null,
+        device && timers.has(device.id) && canControl && device.access !== 'view'
+          ? option('Edit timer', () => openTimer(device, timers.get(device.id))) : null,
+        canEdit ? option('Edit placement', () => { if (!editing()) startEditing(); select(target); }) : null,
+        editing() && target.type === 'object' ? option('Duplicate', () => duplicateObject(entry)) : null,
+        editing() ? option('Remove from plan', () => removeTarget(target)) : null));
+    dialog.addEventListener('close', () => dialog.remove());
+    document.body.append(dialog);
+    dialog.showModal();
+  }
 
   function drawPreview([x1, z1], [x2, z2]) {
     clearPreview();
@@ -566,6 +712,7 @@ export function createHome3d({
     const taken = new Set(draft.rooms.map((r) => r.id));
     let n = draft.rooms.length + 1;
     while (taken.has(`room-${n}`)) n++;
+    remember();
     draft.rooms.push({ id: `room-${n}`, name: `Room ${n}`, floor, height: 2.5, points: [[minX, minZ], [maxX, minZ], [maxX, maxZ], [minX, maxZ]] });
     for (const d of draft.devices) {
       if (!d.roomId) d.roomId = roomAt(draft, d.position[0], d.position[2], floor)?.id ?? null;
@@ -576,6 +723,7 @@ export function createHome3d({
   }
 
   function select(next) {
+    if (next?.id !== selected?.id || next?.type !== selected?.type) roomHandle = null;
     selected = next;
     build();
   }
@@ -615,6 +763,7 @@ export function createHome3d({
           select(null);
         },
       }, 'Draw room'),
+      h('button', { type: 'button', onclick: () => openObjectBrowser(addObject) }, 'Add object'),
       floorSelect,
       h('select', {
         'aria-label': 'Select object',
@@ -627,14 +776,17 @@ export function createHome3d({
       h('optgroup', { label: 'Rooms' }, current().rooms.filter((r) => r.floor === floor).map((r) =>
         h('option', { value: `room:${r.id}`, selected: selected?.type === 'room' && selected.id === r.id }, r.name))),
       h('optgroup', { label: 'Devices' }, [...deviceObjects.keys()].map((id) =>
-        h('option', { value: `device:${id}`, selected: selected?.type === 'device' && selected.id === id }, devices.get(id).name)))),
+        h('option', { value: `device:${id}`, selected: selected?.type === 'device' && selected.id === id }, devices.get(id).name))),
+      h('optgroup', { label: 'Design objects' }, (current().objects ?? []).filter((o) => o.floor === floor).map((o) =>
+        h('option', { value: `object:${o.id}`, selected: selected?.type === 'object' && selected.id === o.id }, o.name)))),
+      h('button', { type: 'button', disabled: !undo.length, onclick: () => { draft = undo.pop(); roomHandle = null; select(null); } }, 'Undo'),
       h('button.primary', { type: 'button', onclick: save }, 'Save'),
       h('button.icon-button', { type: 'button', onclick: cancelEditing }, 'Cancel'),
     );
     hint.hidden = false;
     hint.textContent = mode === 'draw'
       ? 'Drag on the floor to draw a rectangular room.'
-      : 'Select a device or room to configure it. Drag devices to move them.';
+      : 'Drag objects to move them. Select a room to drag its walls or corners.';
   }
 
   function renderPanel() {
@@ -654,7 +806,8 @@ export function createHome3d({
     if (selected?.type === 'device') {
       const device = devices.get(selected.id);
       if (!device) return null;
-      if (!editing()) return [h('div.stage-panel-head', {}, close), renderCard(device)];
+      if (!editing()) return [h('div.stage-panel-head', {}, close), renderCard(device),
+        h('button', { type: 'button', onclick: () => openDeviceHistory(device, canEdit) }, 'Activity and charts')];
       const placement = draft.devices.find((d) => d.deviceId === device.id);
       const room = draft.rooms.find((r) => r.id === placement?.roomId);
       const height = h('output', {}, `${placement.position[1].toFixed(1)} m`);
@@ -681,17 +834,22 @@ export function createHome3d({
         ...placementEditor(placement, device, listActions(), () => build(false)),
         h('button.icon-button', {
           type: 'button',
-          onclick: () => {
-            draft.devices = draft.devices.filter((d) => d.deviceId !== device.id);
-            select(null);
-          },
+          onclick: () => removeTarget(selected),
         }, 'Remove from plan'),
         tray,
       ];
     }
-    if (selected?.type === 'room' && editing()) {
-      const room = draft.rooms.find((r) => r.id === selected.id);
+    if (selected?.type === 'object') {
+      const object = (current().objects ?? []).find((o) => o.id === selected.id);
+      if (!object) return null;
+      const head = h('div.stage-panel-head', {}, h('strong', {}, object.name), close);
+      if (!editing()) return [head, h('p.muted', {}, object.size.map((n) => `${n} m`).join(' × '))];
+      return [head, ...objectEditor(object), tray];
+    }
+    if (selected?.type === 'room') {
+      const room = current().rooms.find((r) => r.id === selected.id);
       if (!room) return null;
+      if (!editing()) return [h('div.stage-panel-head', {}, h('strong', {}, room.name), close)];
       return [
         h('div.stage-panel-head', {}, h('strong', {}, 'Room'), close),
         h('label.field', {}, 'Name', h('input', {
@@ -703,13 +861,10 @@ export function createHome3d({
           onchange: () => build(false),
         })),
         ...roomEditor(room, () => build(false)),
+        ...(roomHandle?.id === room.id ? handleEditor(room) : []),
         h('button.icon-button.danger', {
           type: 'button',
-          onclick: () => {
-            draft.rooms = draft.rooms.filter((r) => r.id !== room.id);
-            for (const d of draft.devices) if (d.roomId === room.id) d.roomId = null;
-            select(null);
-          },
+          onclick: () => removeTarget(selected),
         }, 'Delete room'),
         tray,
       ];
@@ -717,13 +872,99 @@ export function createHome3d({
     return tray ? [tray] : null;
   }
 
+  function handleEditor(room) {
+    const { type, index } = roomHandle;
+    const button = (label, change, keep = false) => h('button', { type: 'button', onclick: () => changeGeometry(change, keep) }, label);
+    const [x, z] = room.points[index];
+    const step = (dx, dz) => (plan) => moveRoomGeometry(plan, room.id, type, index, [dx, dz]);
+    return [
+      h('strong', {}, type === 'room' ? 'Move room' : `${type === 'wall' ? 'Wall' : 'Corner'} ${index + 1}`),
+      h('div.row', {}, button('←', step(-.1, 0), true), button('→', step(.1, 0), true),
+        button('↑', step(0, -.1), true), button('↓', step(0, .1), true)),
+      type === 'corner' ? h('p.muted', {}, `X ${x} m · Z ${z} m`) : null,
+      type === 'wall' ? button('Split wall', (plan) => splitRoomWall(plan, room.id, index)) : null,
+      type === 'corner' ? button('Remove corner', (plan) => removeRoomCorner(plan, room.id, index)) : null,
+    ];
+  }
+
+  function objectEditor(object) {
+    const number = (label, value, minimum, change) => field(label, h('input', {
+      type: 'number', required: true, min: minimum, step: 'any', value,
+      onchange: (e) => {
+        const input = e.target;
+        if (input.checkValidity() && Number.isFinite(input.valueAsNumber)) { change(input.valueAsNumber); build(false); }
+        else input.reportValidity();
+      },
+    }));
+    return [
+      field('Name', h('input', { value: object.name, maxLength: 80, onchange: (e) => { object.name = e.target.value.trim() || object.name; } })),
+      h('div.scene-fields-pair', {},
+        ...['Width', 'Height', 'Depth'].map((label, i) =>
+          number(`${label} (m)`, object.size[i], .01, (value) => { object.size[i] = value; })),
+        number('Rotation (°)', object.rotation, undefined, (value) => { object.rotation = value; }),
+        number('Elevation (m)', object.position[1], 0, (value) => { object.position[1] = value; }),
+        field('Color', h('input', { type: 'color', value: object.color, onchange: (e) => { object.color = e.target.value; build(false); } }))),
+      h('div.row', {},
+        h('button', { type: 'button', onclick: () => duplicateObject(object) }, 'Duplicate'),
+        h('button', { type: 'button', onclick: () => removeTarget(selected) }, 'Delete object')),
+    ];
+  }
+
+  function removeTarget(target) {
+    remember();
+    if (target.type === 'object') draft.objects = draft.objects.filter((o) => o.id !== target.id);
+    if (target.type === 'device') {
+      const placement = draft.devices.find((entry) => entry.deviceId === target.id);
+      if (placement) placement.hidden = true;
+    }
+    if (target.type === 'room') {
+      draft.rooms = draft.rooms.filter((r) => r.id !== target.id);
+      for (const item of [...draft.devices, ...draft.objects]) if (item.roomId === target.id) item.roomId = null;
+    }
+    select(null);
+  }
+
+  function addObject(item) {
+    const room = draft.rooms.find((r) => r.id === selected?.id && selected.type === 'room');
+    const b = bounds(draft.rooms.filter((r) => r.floor === floor));
+    const [x, z] = room ? centroid(room.points) : [(b.minX + b.maxX) / 2, (b.minZ + b.maxZ) / 2];
+    const object = {
+      type: item.id, name: item.name, position: [x, 0, z], size: [...item.size], color: item.color, rotation: 0,
+      floor, roomId: room?.id ?? roomAt(draft, x, z, floor)?.id ?? null,
+    };
+    insertObject(object);
+  }
+
+  function duplicateObject(object) {
+    if (!object) return;
+    const copy = structuredClone(object);
+    copy.position[0] += .25;
+    copy.position[2] += .25;
+    insertObject(copy);
+  }
+
+  function insertObject(object) {
+    remember();
+    object.id = `object-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    draft.objects.push(object);
+    select({ type: 'object', id: object.id });
+  }
+
   function shownDevicesNotIn(p) {
-    const placedIds = new Set(p.devices.map((d) => d.deviceId));
-    const pool = deviceIds ? shownDevices() : [...devices.values()];
+    const placedIds = new Set(p.devices.filter((entry) => !entry.hidden).map((d) => d.deviceId));
+    const pool = deviceIds ? deviceIds.map((id) => devices.get(id)).filter(Boolean) : [...devices.values()];
     return pool.filter((d) => !placedIds.has(d.id)).sort((a, b) => a.name.localeCompare(b.name));
   }
 
   function placeDevice(device) {
+    remember();
+    const previous = placementOf(device.id);
+    if (previous?.hidden) {
+      delete previous.hidden;
+      floor = floorOf(previous.roomId);
+      select({ type: 'device', id: device.id });
+      return;
+    }
     const room = selected?.type === 'room' ? draft.rooms.find((r) => r.id === selected.id) : null;
     const rooms = draft.rooms.filter((r) => r.floor === floor);
     const b = bounds(rooms);
@@ -738,6 +979,8 @@ export function createHome3d({
 
   function startEditing() {
     draft = structuredClone(saved);
+    draft.objects ??= [];
+    undo.length = 0;
     // Keep the guessed positions so saving stores them.
     for (const [deviceId, place] of placements()) {
       if (!place.placed) draft.devices.push({ deviceId, roomId: place.roomId, position: place.position });
@@ -782,6 +1025,7 @@ export function createHome3d({
 
   return {
     el,
+    refreshTimer,
     /** A device's state or details changed. */
     update(device, changes) {
       if (deviceObjects.has(device.id)) refreshDevice(device, changes);

@@ -173,11 +173,12 @@ export function scopedRegistry(registry, policy) {
       const device = registry.get(id);
       return device ? policy.decorate(device) : undefined;
     },
-    async command(id, values) {
+    async command(id, values, timer) {
       const device = registry.get(id);
       if (!device || !policy.canSee(id)) throw new HttpError(404, 'Unknown device');
       policy.check(device, values);
-      return registry.command(id, values);
+      if (timer) policy.check(device, timer.values);
+      return registry.command(id, values, timer);
     },
     /** Throws when `values` are not allowed (or the device is hidden), without sending anything. */
     check(id, values) {

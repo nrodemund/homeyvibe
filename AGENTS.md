@@ -22,7 +22,7 @@ Roadmap, in order: **room scanning in the PWA** (writes the shared floor plan) â
 - `apps/web`: Vite 5, **vanilla JS, no framework**, `three` for 3D pages (lazy-loaded), service worker in `public/sw.js`. Tests with `node:test` on pure modules.
 - `apps/desktop`: Electron, placeholder only.
 - `packages/shared`: shared code, nearly empty so far.
-- Persistence: JSON files in `HOMEYVIBE_DATA_DIR` via `JsonStore` (atomic writes, mode 600). No database.
+- Persistence: JSON files in `HOMEYVIBE_DATA_DIR` via `JsonStore` (atomic writes, mode 600). Device history uses Node's built-in SQLite in the same directory.
 
 ## Layout
 
@@ -94,7 +94,7 @@ Do:
 
 Don't:
 
-- Don't add TypeScript, a frontend framework, Express, a database, or a bundler on the server.
+- Don't add TypeScript, a frontend framework, Express, a separate database service, or a bundler on the server.
 - Don't call an LLM from the server by default. The optional server-side chat (`ai/chat.js`) is the only exception and must stay optional.
 - Don't send or store a user's AI API key on the server unless an admin explicitly chose the shared-key option. Client keys stay in the browser.
 - Don't hardcode device models, vendors or zigbee2mqtt specifics outside `providers/zigbee2mqtt/`.

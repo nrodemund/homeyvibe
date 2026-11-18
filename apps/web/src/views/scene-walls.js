@@ -1,11 +1,9 @@
 import * as THREE from 'three';
-import { CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import { polygonArea } from '../floorplan.js';
 import { roomWalls, wallPieces } from '../floorplan-visuals.js';
-import { h } from '../ui.js';
 
-/** Draw room walls, their openings and labels identifying the selected room's walls. */
-export function addWalls(world, rooms, colors, selectedId) {
+/** Draw room walls and their openings. */
+export function addWalls(world, rooms, colors) {
   for (const wall of roomWalls(rooms)) {
     const [[x, z], [toX, toZ]] = [wall.from, wall.to];
     const group = new THREE.Group();
@@ -60,13 +58,6 @@ export function addWalls(world, rooms, colors, selectedId) {
     }
   }
 
-  const selected = rooms.find((room) => room.id === selectedId);
-  selected?.points.forEach(([x, z], index) => {
-    const [toX, toZ] = selected.points[(index + 1) % selected.points.length];
-    const label = new CSS2DObject(h('span.wall-label', {}, `Wall ${index + 1}`));
-    label.position.set((x + toX) / 2, 0.18, (z + toZ) / 2);
-    world.add(label);
-  });
 }
 
 function addOutline(group, points, color, closed = true) {

@@ -14,7 +14,8 @@ export const DISPLAYS = Object.freeze({
 });
 
 export const NUMERIC_DISPLAYS = ['color', 'badge', 'bar', 'gauge', 'chart', 'trend', 'thermometer', 'threshold'];
-export const CLICK_MODES = ['details', 'command', 'action', 'message', 'none'];
+export const CLICK_MODES = ['details', 'command', 'action', 'message', 'chart', 'none'];
 export const ROOM_STYLES = ['floorColor', 'wallColor', 'edgeColor', 'wallHeight', 'wallThickness', 'wallOpacity', 'edges'];
 export const HISTORY_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const HISTORY_BUCKET_MS = 5 * 60 * 1000;
+export const CHART_RANGES = { '2h': '2 hours', '24h': '24 hours', '30d': '30 days', all: 'All history' };

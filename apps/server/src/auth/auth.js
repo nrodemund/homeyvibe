@@ -103,6 +103,11 @@ export class AuthService {
   // ---- login and sessions ------------------------------------------------------
 
   async login(username, password) {
+    const user = await this.verifyAccountPassword(username, password);
+    return { token: this.#createSession(user.id), user };
+  }
+
+  async verifyAccountPassword(username, password) {
     username = String(username ?? '').trim().toLowerCase();
     const lock = this.#failures.get(username);
     if (lock && lock.until > this.now()) throw new HttpError(429, 'Too many attempts, try again shortly');
@@ -116,7 +121,7 @@ export class AuthService {
       throw new HttpError(401, 'Wrong username or password');
     }
     this.#failures.delete(username);
-    return { token: this.#createSession(user.id), user: publicUser(user) };
+    return publicUser(user);
   }
 
   #createSession(userId) {
@@ -129,6 +134,15 @@ export class AuthService {
 
   #liveSessions() {
     return this.store.read('sessions', []).filter((s) => s.expiresAt > this.now());
+  }
+
+  /** The push service stores only the session hash. */
+  activeSession(hash) {
+    return this.#liveSessions().some((session) => session.hash === hash);
+  }
+
+  isSession(token) {
+    return Boolean(token && this.activeSession(sha256(token)));
   }
 
   /** Resolve a session or access token to a user, or null. */

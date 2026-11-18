@@ -3,6 +3,7 @@ import { h, onSubmit, toast } from '../ui.js';
 import { labelFor } from '../controls.js';
 import { field } from './auth.js';
 import { selectField, valueField } from './value-fields.js';
+import { timerField } from './device-timer.js';
 
 const layouts = [['grid', 'Grid'], ['list', 'List'], ['3d', '3D floor plan']];
 const steps = [['set', 'Set a device'], ['delay', 'Wait'], ['run', 'Run another action']];
@@ -149,6 +150,8 @@ export async function openConfigDialog(kind) {
         textField('Description (optional)', draft, 'description', 500),
         h('label.row', {}, h('input', { type: 'checkbox', checked: draft.enabled,
           onchange: (e) => { draft.enabled = e.target.checked; } }), 'Enabled'),
+        selectField('Approval', [['none', 'None'], ['confirm', 'Ask for confirmation'], ['passkey', 'Verify with a passkey']],
+          draft.security ?? 'none', (security) => { draft.security = security; }),
         h('h3', {}, 'Steps'),
         ...draft.steps.map((step, i) => h('fieldset.config-group.settings-fields', {},
           h('legend', {}, `Step ${i + 1}`),
@@ -183,11 +186,13 @@ export async function openConfigDialog(kind) {
       return [
         deviceField(step.deviceId, (deviceId) => {
           Object.assign(step, { deviceId, values: {} });
+          delete step.timer;
           draw();
         }),
         ...Object.entries(step.values).map(([property, value]) => h('div.settings-fields', {},
           valueField(capabilities.find((cap) => cap.property === property), property, value, (next) => {
             step.values[property] = next;
+            if (capabilities.find((cap) => cap.property === property)?.type === 'binary') draw();
           }),
           button(`Remove ${property}`, () => { delete step.values[property]; draw(); }),
         )),
@@ -197,6 +202,7 @@ export async function openConfigDialog(kind) {
           step.values[property] = cap.valueOn ?? cap.values?.[0] ?? cap.min ?? (cap.type === 'numeric' ? 0 : '');
           draw();
         }, { placeholder: 'Choose a writable control', required: Object.keys(step.values).length === 0, disabled: !available.length }),
+        timerField(step, devices.find((d) => d.id === step.deviceId)),
       ];
     }
 

@@ -28,6 +28,18 @@ Pages with layout `3d` render the home's floor plan with three.js (loaded only w
 - **Click behavior** can open the full card, send a preset command to that device, run a saved action, show a message in HomeyVibe, or do nothing. When a marker has a custom click, use the **i** button to open its full controls. Commands and actions use your normal permissions and limits.
 - **Room lighting** lets lights illuminate the room when on, following the device's brightness. Set the effect's strength and color under the light's layout settings.
 
+Select a room in **Edit layout** to show handles for each corner and wall and for the whole room. Drag a handle to move it, or select it and use the arrow buttons for smaller adjustments. Select a wall and choose **Split wall** to add a corner. Add furniture and decor from **Add object**, then drag, rotate, resize, recolor, duplicate or delete it. **Undo** restores recent moves and structural edits.
+
+Right-click or press and hold a room, device or design object for its options. Device **Activity and charts** shows a timeline and table of events, with a chart tab for numeric readings. **Click behavior → Open chart** can preset the reading, time window and scale. Configured charts and trends save history automatically. Use **Keep long-term history** to track another reading.
+
+## App, alerts and timers
+
+Open HomeyVibe over HTTPS and choose **Install app** from the user menu. On iPhone or iPad, use Safari’s **Add to Home Screen**. After sign-in, the app keeps its session for up to 30 days. **Notifications** enables background alerts on the current device for all visible devices or a selected list. Opening a notification returns to HomeyVibe.
+
+Add a passkey in the user menu to use your device’s fingerprint, face recognition or PIN for protected actions. In **Actions**, select **Ask for confirmation** or **Verify with a passkey** under **Approval**. Approval applies to the named action. Direct device controls follow the separate device permissions.
+
+For a preset or action step that turns a switch on, fill in **Turn off after (minutes)**. Enter 240 for four hours. Starting it again replaces the countdown. In 3D, right-click or press and hold the device and choose **Edit timer**. On the device card, click the countdown to reschedule or cancel it.
+
 ## Run
 
 ```sh
