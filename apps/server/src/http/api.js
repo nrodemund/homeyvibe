@@ -4,6 +4,7 @@ import { buildContext } from '../ai/context.js';
 import { importConfig } from '../ai/importer.js';
 import { handleMcpRequest } from '../ai/mcp.js';
 import { scopedRegistry } from '../auth/access.js';
+import { aiToolkit, systemBlocks, DEFAULT_MODEL } from '../ai/chat.js';
 
 const MAX_BODY = 64 * 1024;
 const COOKIE = 'hv_session';
@@ -43,6 +44,8 @@ const COOKIE_MAX_AGE_S = 30 * 24 * 60 * 60;
  *   GET  /api/floorplan                       devices:read: { rooms, devices } (see config/floorplan.js)
  *   PUT  /api/floorplan                       config:write: replace the floor plan
  *   POST /api/ai/import                       config:write ({ pages, actions } from an LLM)
+ *   GET  /api/ai/tools                        devices:read: { model, system, tools } for a client-side AI chat
+ *   POST /api/ai/tools/:name                  devices:read: run one tool with the AI's limits -> { ok, text }
  *   POST /mcp                                 MCP (Streamable HTTP, stateless), Bearer token
  *   GET  /api/ai/settings                     signed in: { configured, source, keyHint, model }
  *   PATCH /api/ai/settings                    config:write: { apiKey?, model? }
@@ -112,6 +115,14 @@ export function createApiHandler({ registry, auth, pages, actions, engine, aiSet
       }],
       ['POST', '/api/ai/import', { permission: PERMISSIONS.CONFIG_WRITE }, ({ body, user }) =>
         importConfig({ bundle: body, pages, actions, registry: devicesFor(user), floorplan })],
+      // For clients that run the model themselves (the Pi only runs the tools).
+      ['GET', '/api/ai/tools', { permission: PERMISSIONS.DEVICES_READ }, ({ user }) => ({
+        model: aiSettings?.model() ?? DEFAULT_MODEL,
+        system: systemBlocks(user),
+        tools: aiToolkit({ user, deps: { registry, pages, actions, engine, floorplan, access } }).definitions,
+      })],
+      ['POST', '/api/ai/tools/:name', { permission: PERMISSIONS.DEVICES_READ }, ({ user, params, body }) =>
+        aiToolkit({ user, deps: { registry, pages, actions, engine, floorplan, access }, by: `client-ai:${user.username}` }).run(params.name, body)],
       ['POST', '/mcp', { permission: PERMISSIONS.DEVICES_READ, raw: true }, ({ req, res, body, user }) =>
         handleMcpRequest({ req, res, body, user, deps: { registry, pages, actions, engine, floorplan, access } })],
     ] : []),
