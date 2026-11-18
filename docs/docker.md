@@ -89,7 +89,7 @@ docker run --rm -v homeyvibe_homeyvibe-data:/data -v "$PWD":/backup alpine \
 
 ## Remote access and HTTPS
 
-HomeyVibe is meant to stay on your home network. Do not forward port 80 on your router. Until the end-to-end encrypted gateway lands, use a VPN such as WireGuard or Tailscale to reach it from outside. If you put it behind your own reverse proxy with HTTPS, forward the `Host` header unchanged (or set `X-Forwarded-Host`), since the server checks that requests come from the same origin.
+Use the optional [Docker peer relay](relay.md) for private remote access and an HTTPS address for the PWA. If you put HomeyVibe behind your own HTTPS reverse proxy, preserve the original `Host` or set `X-Forwarded-Host` for HomeyVibe's same-origin check.
 
 ## Build the images yourself
 
