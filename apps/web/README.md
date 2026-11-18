@@ -15,13 +15,18 @@ State streams live from `GET /api/events` (Server-Sent Events), so changes from 
 
 ## Configuration
 
-Admins can use **Zigbee2MQTT** in the user menu to connect a broker and check discovery. **Pages** edits dashboard layouts, sections and controls. **Actions** edits scenes and routines with device settings, delays and time or state triggers.
+Admins can use **Zigbee2MQTT** in the user menu to connect a broker and check discovery. **Pages** edits dashboard layouts, sections and controls. Use the arrows to reorder tabs and **Set as start page** to choose what opens at the dashboard root. **Actions** edits scenes and routines with device settings, delays and time or state triggers.
 
 Under **Set up with AI**, connect Codex over MCP, download a context file for ChatGPT, or select OpenAI or Claude for the optional shared assistant.
 
 ## 3D pages
 
-Pages with layout `3d` render the home's floor plan with three.js (loaded only when such a page opens). Lights glow with their brightness, every device has a live label, and tapping one opens its controls. Admins can choose **Edit layout** to draw rooms by dragging on the floor, rename or delete rooms, drag devices into place, set their height, and place devices that are not in the plan yet. Devices without a position are guessed from room names in the device name or its page section.
+Pages with layout `3d` render the home's floor plan with three.js (loaded only when such a page opens). Admins can choose **Edit layout**, then select a room or device directly on the plan or from **Select object**.
+
+- **Rooms** can have custom floor and wall colors, wall height, thickness and opacity, and colored outlines. **Doors and windows** cuts openings into a numbered wall. Set the offset, width and height in meters and use sill height to position a window above the floor.
+- **Devices** can be dragged or moved to a different height. The **Display** group offers a live value, gradient, badge, bar, dial, plot, trend arrow, thermometer, threshold, status, icon, or automatic summary. The choices follow the model's capabilities. Plots and trend arrows use up to 24 hours of numeric readings in server memory, collected while HomeyVibe is running.
+- **Click behavior** can open the full card, send a preset command to that device, run a saved action, show a message in HomeyVibe, or do nothing. When a marker has a custom click, use the **i** button to open its full controls. Commands and actions use your normal permissions and limits.
+- **Room lighting** lets lights illuminate the room when on, following the device's brightness. Set the effect's strength and color under the light's layout settings.
 
 ## Run
 

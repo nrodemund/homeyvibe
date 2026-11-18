@@ -36,7 +36,8 @@ export class PageStore extends EventEmitter {
     const pages = this.store.read('pages', []);
     const page = normalizePage({ ...input, id: input.id ?? uniqueId(slugify(input.title), pages) });
     if (pages.some((p) => p.id === page.id)) throw new HttpError(409, `Page ${page.id} already exists`);
-    page.order ??= pages.length;
+    page.order ??= Math.max(-1, ...pages.map((p) => p.order ?? 0)) + 1;
+    if (page.startPage) for (const other of pages) delete other.startPage;
     pages.push(page);
     this.store.write('pages', pages);
     this.emit('changed');
@@ -48,10 +49,23 @@ export class PageStore extends EventEmitter {
     const index = pages.findIndex((p) => p.id === id);
     if (index === -1) throw new HttpError(404, 'Unknown page');
     const page = normalizePage({ ...pages[index], ...changes, id });
+    if (page.startPage) for (const other of pages) delete other.startPage;
     pages[index] = page;
     this.store.write('pages', pages);
     this.emit('changed');
     return page;
+  }
+
+  /** Replace display order in one write, detecting a page added or removed since the editor opened. */
+  reorder(ids) {
+    const pages = this.list();
+    const byId = new Map(pages.map((page) => [page.id, page]));
+    if (!Array.isArray(ids) || ids.length !== pages.length || new Set(ids).size !== pages.length ||
+      !ids.every((id) => byId.has(id))) throw new HttpError(409, 'The page list changed. Reload it and try again.');
+    const ordered = ids.map((id, order) => ({ ...byId.get(id), order }));
+    this.store.write('pages', ordered);
+    this.emit('changed');
+    return ordered;
   }
 
   delete(id) {
@@ -89,6 +103,7 @@ export function normalizePage(input) {
     });
   }
   if (input.order !== undefined) v.check(Number.isInteger(input.order), 'order must be an integer');
+  if (input.startPage !== undefined) v.check(typeof input.startPage === 'boolean', 'startPage must be true or false');
   v.throwIfInvalid();
 
   return {
@@ -97,6 +112,7 @@ export function normalizePage(input) {
     icon: input.icon ?? null,
     layout,
     order: input.order,
+    ...(input.startPage !== undefined ? { startPage: input.startPage } : {}),
     sections: sections.map((s) => ({
       title: s.title?.trim() ?? null,
       items: s.items.map((item) =>

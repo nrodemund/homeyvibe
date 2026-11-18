@@ -423,7 +423,7 @@ code.token { font-size: 0.8rem; word-break: break-all; padding: 8px 10px; border
 .stage.loading { display: grid; place-items: center; }
 .stage-canvas { position: absolute; inset: 0; z-index: 0; } /* contains the labels' z-index */
 .stage-toolbar, .stage-hint, .stage-panel { z-index: 1; }
-.stage-canvas canvas { display: block; width: 100%; height: 100%; }
+.stage-canvas > canvas { display: block; width: 100%; height: 100%; }
 .stage-labels { position: absolute; inset: 0; pointer-events: none; }
 
 .room-label {
@@ -461,6 +461,86 @@ code.token { font-size: 0.8rem; word-break: break-all; padding: 8px 10px; border
 .device-label.on { border-color: #f0b04a; }
 .device-label.offline { opacity: 0.6; }
 .device-label.selected { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+
+.scene-marker {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  pointer-events: none;
+}
+.device-label[aria-busy='true'] { cursor: progress; opacity: 0.7; }
+.device-label-details {
+  display: grid;
+  place-items: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--card);
+  color: var(--text);
+  cursor: pointer;
+  pointer-events: auto;
+}
+.device-label-details[hidden] { display: none; }
+.device-label-text .scene-reading-badge {
+  align-self: start;
+  padding: 2px 5px;
+  border-radius: 5px;
+  border-left: 3px solid var(--marker-color);
+  background: color-mix(in srgb, var(--marker-color) 24%, var(--card));
+  color: var(--text);
+}
+.scene-reading-meter {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 2px;
+}
+.scene-meter { display: inline-block; flex-shrink: 0; }
+.scene-meter.bar {
+  width: 34px;
+  height: 5px;
+  border-radius: 9px;
+  background: linear-gradient(to right, var(--accent) var(--reading), var(--line) 0);
+}
+.scene-meter.gauge {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: conic-gradient(from 230deg, var(--accent) calc(var(--reading) * .72), var(--line) 0 72%, transparent 0);
+  mask-image: radial-gradient(transparent 46%, black 49%);
+}
+.scene-meter.thermometer {
+  position: relative;
+  width: 7px;
+  height: 18px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: linear-gradient(to top, #f57850 var(--reading), var(--line) 0);
+}
+.scene-meter.thermometer::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: -2px;
+  width: 9px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f57850;
+}
+.scene-reading-plot { display: flex; flex-direction: column; }
+.scene-plot { display: block; width: 96px; height: 27px; }
+.scene-no-readings { font-size: .65rem; }
+.wall-label {
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--card);
+  color: var(--text);
+  font-size: .7rem;
+  white-space: nowrap;
+}
 
 .stage-toolbar {
   position: absolute;
@@ -508,7 +588,7 @@ code.token { font-size: 0.8rem; word-break: break-all; padding: 8px 10px; border
   position: absolute;
   left: 10px;
   bottom: 10px;
-  width: min(340px, calc(100% - 20px));
+  width: min(365px, calc(100% - 20px));
   max-height: calc(100% - 70px);
   overflow: auto;
   display: flex;
@@ -526,6 +606,24 @@ code.token { font-size: 0.8rem; word-break: break-all; padding: 8px 10px; border
 .stage-panel-head:has(> button:only-child) { position: absolute; top: 8px; right: 8px; z-index: 1; }
 .stage-panel:has(> .stage-panel-head > button:only-child) .card header { padding-right: 36px; }
 .stage-panel .slider { max-width: none; }
+.scene-editor-group {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 8px 10px;
+  font-size: .85rem;
+}
+.scene-editor-group > summary { cursor: pointer; font-weight: 600; }
+.scene-editor-group[open] > summary { margin-bottom: 10px; }
+.scene-fields-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  align-items: end;
+}
+.scene-fields-pair input { min-width: 0; }
+.scene-fields-pair input[type='color'] { width: 100%; height: 36px; padding: 3px; }
+.scene-command { display: flex; gap: 4px; align-items: end; }
+.scene-command > .field { flex: 1; min-width: 0; }
 .stage-tray { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 0.8rem; }
 .chip {
   padding: 5px 10px;

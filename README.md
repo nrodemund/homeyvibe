@@ -24,7 +24,7 @@ HomeyVibe finds your devices by itself, lets an AI set up pages and automations 
 - Auto-discovery of devices and their capabilities (zigbee2mqtt today, more providers to come)
 - Live dashboard with controls generated from each device's capabilities
 - Pages and actions (scenes and automations with triggers)
-- 3D pages of your floor plan built with three.js
+- 3D floor plans with configurable rooms, sensor displays, light effects, and one-click device presets
 - Users and roles, plus limits such as "radiator only between 18 and 22 °C"
 - Manual page, scene and automation editors, with AI configuration via MCP, the built-in assistant, or a context file
 - Planned: room scanning in the PWA to create the floor plan, an end-to-end encrypted cloud gateway, an Electron desktop app

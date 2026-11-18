@@ -2,6 +2,7 @@ import { api } from '../api.js';
 import { h, onSubmit, toast } from '../ui.js';
 import { labelFor } from '../controls.js';
 import { field } from './auth.js';
+import { selectField, valueField } from './value-fields.js';
 
 const layouts = [['grid', 'Grid'], ['list', 'List'], ['3d', '3D floor plan']];
 const steps = [['set', 'Set a device'], ['delay', 'Wait'], ['run', 'Run another action']];
@@ -27,11 +28,36 @@ export async function openConfigDialog(kind) {
 
   async function list() {
     const items = await collection.load();
+    const start = kind === 'pages' && items.find((item) => item.startPage);
+    async function updateList(save) {
+      try {
+        await save();
+        await list();
+      } catch (err) {
+        showError(err);
+      }
+    }
+    const move = (index, direction) => updateList(() => {
+      const ids = items.map((item) => item.id);
+      ids.splice(index + direction, 0, ids.splice(index, 1)[0]);
+      return api.reorderPages(ids);
+    });
     body.replaceChildren(
-      button(`New ${collection.item}`, () => edit().catch(showError), { className: 'primary' }),
-      ...items.map((item) => h('div.row.config-entry', {},
-        h('strong', {}, item[collection.name]),
-        button('Edit', () => edit(item).catch(showError), { 'aria-label': `Edit ${item[collection.name]}` }),
+      h('div.row', {},
+        button(`New ${collection.item}`, () => edit().catch(showError), { className: 'primary' }),
+        start ? button('Start on All devices', () => updateList(() => api.setPageStart(start.id, false))) : null,
+      ),
+      ...items.map((item, index) => h('div.row.config-entry', {},
+        h('strong', {}, item[collection.name], item.startPage ? h('small.muted', {}, ' · Start page') : null),
+        h('div.row', {},
+          kind === 'pages' ? [
+            button('↑', () => move(index, -1), { 'aria-label': `Move ${item.title} up`, disabled: index === 0 }),
+            button('↓', () => move(index, 1), { 'aria-label': `Move ${item.title} down`, disabled: index === items.length - 1 }),
+            item.startPage ? null : button('Set as start page', () => updateList(() => api.setPageStart(item.id, true)),
+              { 'aria-label': `Set ${item.title} as start page` }),
+          ] : null,
+          button('Edit', () => edit(item).catch(showError), { 'aria-label': `Edit ${item[collection.name]}` }),
+        ),
       )),
     );
   }
@@ -76,8 +102,8 @@ export async function openConfigDialog(kind) {
         selectField('Layout', layouts, draft.layout, (value) => { draft.layout = value; }),
         h('div.row', {},
           textField('Icon (optional)', draft, 'icon', 16),
-          field('Order', h('input', { type: 'number', step: '1', value: draft.order ?? '',
-            oninput: (e) => { draft.order = e.target.value === '' ? undefined : e.target.valueAsNumber; } })),
+          h('label.row', {}, h('input', { type: 'checkbox', checked: draft.startPage,
+            onchange: (e) => { draft.startPage = e.target.checked; } }), 'Open on startup'),
         ),
         ...draft.sections.map((section, index) => h('fieldset.config-group.settings-fields', {},
           h('legend', {}, `Section ${index + 1}`),
@@ -253,38 +279,4 @@ function button(label, onclick, props = {}) {
 function textField(label, draft, key, maxLength, required = false) {
   return field(label, h('input', { value: draft[key] ?? '', maxLength, required,
     oninput: (e) => { draft[key] = e.target.value || (required ? '' : null); } }));
-}
-
-function selectField(label, options, value, update, { placeholder, ...props } = {}) {
-  const select = h('select', { ...props, onchange: (e) => update(e.target.value) });
-  if (placeholder) select.add(new Option(placeholder, ''));
-  for (const [id, text] of options) select.add(new Option(text, id));
-  if (value && !options.some(([id]) => id === value)) select.add(new Option(`Unavailable (${value})`, value));
-  select.value = value ?? '';
-  return field(label, select);
-}
-
-function valueField(cap, property, value, update, label = cap ? labelFor(cap) : property) {
-  const options = cap?.type === 'binary' ? [cap.valueOff, cap.valueOn] : cap?.values;
-  if (options?.length) {
-    return selectField(label, options.map((option) => [JSON.stringify(option), String(option)]),
-      value === undefined ? '' : JSON.stringify(value), (next) => update(next ? JSON.parse(next) : undefined),
-      { placeholder: 'Choose a value', required: true });
-  }
-  if (cap?.type === 'numeric') {
-    return field(label, h('input', { type: 'number', step: 'any', value: value ?? '', required: true,
-      oninput: (e) => update(e.target.value === '' ? undefined : e.target.valueAsNumber) }));
-  }
-  const text = cap?.type === 'text';
-  return field(text ? label : `${label} (JSON)`, h('input', {
-    value: value === undefined ? '' : text ? value : JSON.stringify(value), required: !text,
-    oninput: (e) => {
-      try {
-        update(text ? e.target.value : JSON.parse(e.target.value));
-        e.target.setCustomValidity('');
-      } catch {
-        e.target.setCustomValidity('Enter a valid JSON value.');
-      }
-    },
-  }));
 }

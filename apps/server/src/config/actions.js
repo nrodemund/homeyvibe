@@ -169,13 +169,7 @@ export class ActionEngine extends EventEmitter {
    * on a step that is not allowed. Used before someone with limits runs an action.
    */
   preflight(id, check, depth = 0) {
-    const action = this.actions.get(id);
-    if (!action) throw new HttpError(404, `Unknown action ${id}`);
-    if (depth > MAX_DEPTH) throw new HttpError(400, `Action nesting deeper than ${MAX_DEPTH}`);
-    for (const step of action.steps) {
-      if (step.type === 'set') check(step.deviceId, step.values);
-      else if (step.type === 'run') this.preflight(step.actionId, check, depth + 1);
-    }
+    checkActionSteps(id, (actionId) => this.actions.get(actionId), check, depth);
   }
 
   /** Run an action now. `by` describes who started it, e.g. "user:niklas", "trigger", "ai". */
@@ -234,6 +228,17 @@ export class ActionEngine extends EventEmitter {
     if (now - last < TRIGGER_COOLDOWN_MS) return;
     this.#lastTriggered.set(action.id, now);
     this.run(action.id, { by }).catch(() => {});
+  }
+}
+
+/** Validate commands before running or referencing an action, including nested steps. */
+export function checkActionSteps(id, lookup, check, depth = 0) {
+  const action = lookup(id);
+  if (!action) throw new HttpError(404, `Unknown action ${id}`);
+  if (depth > MAX_DEPTH) throw new HttpError(400, `Action nesting deeper than ${MAX_DEPTH}`);
+  for (const step of action.steps) {
+    if (step.type === 'set') check(step.deviceId, step.values);
+    else if (step.type === 'run') checkActionSteps(step.actionId, lookup, check, depth + 1);
   }
 }
 

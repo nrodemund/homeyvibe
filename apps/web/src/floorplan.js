@@ -159,7 +159,7 @@ export function deviceSummary(device) {
   const state = byProp('state') ?? primary.find((c) => c.type === 'binary' && c.writable);
   if (state && device.state[state.property] !== undefined) parts.push(formatValue(state, device.state[state.property]));
   const brightness = byProp('brightness');
-  if (brightness && device.state[state.property] === state?.valueOn && typeof device.state.brightness === 'number') {
+  if (brightness && state && device.state[state.property] === state.valueOn && typeof device.state.brightness === 'number') {
     parts.push(`${Math.round(((device.state.brightness - (brightness.min ?? 0)) / ((brightness.max ?? 254) - (brightness.min ?? 0))) * 100)}%`);
   }
   for (const prop of ['temperature', 'humidity', 'position']) {
@@ -180,11 +180,12 @@ export function deviceSummary(device) {
 /** 0 (off) to 1 (full) for lights, null for devices that do not emit light. */
 export function lightLevel(device) {
   if (deviceIcon(device) !== 'light') return null;
+  if (device.available === false) return 0;
   const state = device.capabilities.find((c) => c.property === 'state');
   if (!state || device.state.state !== state.valueOn) return 0;
   const b = device.capabilities.find((c) => c.property === 'brightness');
   if (!b || typeof device.state.brightness !== 'number') return 1;
   const min = b.min ?? 0;
   const max = b.max ?? 254;
-  return Math.max(0.05, (device.state.brightness - min) / (max - min || 1));
+  return Math.max(0.05, Math.min(1, (device.state.brightness - min) / (max - min || 1)));
 }

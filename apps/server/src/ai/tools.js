@@ -6,6 +6,8 @@ import { DAYS, OPERATORS } from '../config/actions.js';
 import { describeDevice, FORMAT_GUIDE } from './context.js';
 import { importConfig } from './importer.js';
 import { scopedRegistry } from '../auth/access.js';
+import { visibleFloorplan } from '../config/floorplan-settings.js';
+import { DISPLAYS } from '../../../../packages/shared/src/floorplan.js';
 
 /** Shared guidance for any model using these tools (MCP instructions, in-app chat system prompt). */
 export const TOOL_GUIDE = `HomeyVibe is a smart home server. You can look at the devices it found, control them, and configure dashboard pages and actions (scenes and automations).
@@ -26,11 +28,12 @@ const actionItem = z.object({ type: z.literal('action'), actionId: z.string() })
 export const pageSchema = z.object({
   id: z.string().optional().describe('Existing id to update; omit to create (generated from title)'),
   title: z.string(),
-  icon: z.string().optional().describe('A single emoji'),
+  icon: z.string().nullable().optional().describe('A single emoji'),
   layout: z.enum(LAYOUTS).optional(),
   order: z.number().int().optional(),
+  startPage: z.boolean().optional().describe('Open this page when someone visits the dashboard root'),
   sections: z.array(z.object({
-    title: z.string().optional(),
+    title: z.string().nullable().optional(),
     items: z.array(z.union([deviceItem, actionItem])),
   })),
 });
@@ -54,6 +57,16 @@ const triggerSchema = z.union([
     days: z.array(z.enum(DAYS)).optional(),
   }),
 ]);
+const optionalNumber = z.number().optional();
+const optionalColor = z.string().regex(/^#[\da-f]{6}$/i).optional();
+const clickSchema = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('details') }),
+  z.object({ mode: z.literal('command'), values: z.record(z.string(), z.any()) }),
+  z.object({ mode: z.literal('action'), actionId: z.string() }),
+  z.object({ mode: z.literal('message'), message: z.string() }),
+  z.object({ mode: z.literal('none') }),
+]);
+
 export const floorplanSchema = z.object({
   rooms: z.array(z.object({
     id: z.string().optional().describe('Generated from name if omitted'),
@@ -61,11 +74,26 @@ export const floorplanSchema = z.object({
     floor: z.number().int().optional().describe('0 = ground floor'),
     height: z.number().optional().describe('Ceiling height in meters, default 2.5'),
     points: z.array(z.array(z.number()).length(2)).min(3).describe('Corners [x, z] in meters, seen from above, in order'),
+    style: z.object({
+      floorColor: optionalColor, wallColor: optionalColor, edgeColor: optionalColor,
+      wallHeight: optionalNumber, wallThickness: optionalNumber, wallOpacity: optionalNumber,
+      edges: z.boolean().optional(),
+    }).optional(),
+    openings: z.array(z.object({
+      type: z.enum(['door', 'window']), edge: z.number().int().min(0).describe('Zero-based index of the first corner of the wall'),
+      offset: z.number(), width: z.number(), bottom: optionalNumber, height: z.number(),
+    })).optional().describe('Door and window openings in meters measured from the start of the wall and the floor'),
   })),
   devices: z.array(z.object({
     deviceId: z.string(),
     roomId: z.string().nullable().optional(),
     position: z.array(z.number()).length(3).describe('[x, height, z] in meters'),
+    display: z.object({
+      mode: z.enum(Object.keys(DISPLAYS)), property: z.string().optional(),
+      min: optionalNumber, max: optionalNumber, threshold: optionalNumber, lowColor: optionalColor, highColor: optionalColor,
+    }).optional(),
+    click: clickSchema.optional(),
+    light: z.object({ enabled: z.boolean().optional(), strength: optionalNumber, color: optionalColor }).optional(),
   })),
 });
 
@@ -90,11 +118,9 @@ export function homeTools({ user: person, registry: fullRegistry, pages, actions
   const scope = access ? access.aiFor(person) : null;
   const user = scope?.user ?? person;
   const registry = scope ? scopedRegistry(fullRegistry, scope.policy) : fullRegistry;
-  const deps = { pages, actions, registry, floorplan };
-  const visiblePlan = () => {
-    const plan = floorplan.get();
-    return { ...plan, devices: plan.devices.filter((d) => registry.get(d.deviceId)) };
-  };
+  const canControl = can(user, PERMISSIONS.DEVICES_CONTROL);
+  const deps = { pages, actions, registry, floorplan, canControl };
+  const visiblePlan = () => visibleFloorplan(floorplan.get(), scope?.policy, canControl);
   const tools = [
     zigbee && {
       name: 'diagnose_zigbee2mqtt',

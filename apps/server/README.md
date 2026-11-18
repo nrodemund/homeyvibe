@@ -81,6 +81,8 @@ The AI has its own entry ("HomeyVibe AI") with two extra switches: *can control 
 
 Ids are generated from the title or name (`living-room`) unless given. Validation returns every problem in one 400 response, which helps AI clients fix everything in one go. A triggered action won't re-trigger within 2 seconds, so it can't loop on its own state changes.
 
+Pages may have `startPage: true`. Setting it clears the selection on the previous start page. `PUT /api/pages/order` takes `{ ids: ["page-a", "page-b"] }`, containing all page IDs in the desired order. Existing `order` values determine initial ordering.
+
 ## Floor plan (3D pages)
 
 Pages with layout `3d` show one shared floor plan with live devices in it. `GET /api/floorplan` (devices:read) returns it and `PUT /api/floorplan` (config:write) replaces it; changes stream as the `floorplan` event.
@@ -91,6 +93,12 @@ Pages with layout `3d` show one shared floor plan with live devices in it. `GET 
 ```
 
 Coordinates are meters seen from above (`points` are `[x, z]` corners in order; `position` is `[x, height, z]`). Room ids come from names. A 3D page shows the devices listed in its sections, or every placed device when it lists none. The AI can edit the plan with the `save_floorplan` tool or a `floorplan` key in an import bundle, and room scanning will write it too.
+
+- Room `style` accepts `floorColor`, `wallColor`, and `edgeColor` as hex colors, `wallHeight` and `wallThickness` in meters, `wallOpacity` from 0 to 1, and `edges` as a boolean.
+- Room `openings` entries have `type` (`door` or `window`), `edge` (zero-based index of the wall's first corner), `offset`, `width`, `bottom` and `height`. Lengths are measured in meters. `bottom` is zero for a door and defaults to 0.8 for a window.
+- A placement's `display` has a `mode` and optional `property`, `min`, `max`, `threshold`, `lowColor` and `highColor`. Modes are `auto`, `value`, `color`, `badge`, `bar`, `gauge`, `chart`, `trend`, `thermometer`, `threshold`, `status` and `icon`.
+- `click` modes are `details` (the default), `command` with capability `values`, `action` with `actionId`, `message` with text, and `none`. The client uses the regular device or action endpoint. `light` supports `enabled`, `color` and `strength` (0–2).
+- `GET /api/devices/:id/history?property=temperature` returns `{ points: [[timestampMs, value], …] }` for a visible, readable numeric capability. The server keeps the latest sample per five-minute interval for up to 24 hours in memory.
 
 ## AI configuration
 
@@ -166,6 +174,7 @@ Everything except health and sign-in needs a session.
 | GET | `/api/auth/me` | signed in |
 | GET | `/api/roles` | signed in |
 | GET | `/api/devices`, `/api/devices/:id` | guest and up |
+| GET | `/api/devices/:id/history?property=…` | any user who can see the device |
 | GET, PUT, DELETE | `/api/integrations/zigbee2mqtt` | admin. Read status, replace settings (`mode`, `url`, `username`, `password`, `baseTopic`) or restore defaults. Password is write-only. |
 | POST | `/api/integrations/zigbee2mqtt/retry` | admin. Reconnect and rediscover using active settings. |
 | GET | `/api/events` | guest and up: Server-Sent Events, `snapshot` on connect, then `device`, `removed`, `state` (`{ id, changes }`), `pages`, `actions`, `run` |
@@ -175,6 +184,7 @@ Everything except health and sign-in needs a session.
 | DELETE | `/api/users/:id` | admin (not yourself, never the last admin) |
 | GET | `/api/pages`, `/api/pages/:id`, `/api/actions`, `/api/actions/:id` | guest and up |
 | POST, PATCH, DELETE | `/api/pages[/:id]`, `/api/actions[/:id]` | admin (`config:write`) |
+| PUT | `/api/pages/order` | admin (`config:write`), replaces page ordering |
 | POST | `/api/actions/:id/run` | member and up, returns `{ ok, error?, by, startedAt, finishedAt }` |
 | GET, PATCH | `/api/ai/settings` | signed-in users can read status. Admins may update `{ provider?, apiKey?, model? }`. |
 

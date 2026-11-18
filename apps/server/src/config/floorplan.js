@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { Validator, ID_RE, slugify } from './validate.js';
+import { placementSettings, roomSettings } from './floorplan-settings.js';
 
 /**
  * The home's floor plan, shared by every 3D page. Coordinates are meters seen from above:
@@ -43,6 +44,7 @@ export function normalizeFloorplan(input) {
   const coord = (n) => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) <= MAX_COORD;
 
   const roomIds = new Set();
+  const roomExtras = [];
   if (v.array(rooms, 'rooms', { max: 200 })) {
     rooms.forEach((room, i) => {
       const path = `rooms[${i}]`;
@@ -62,10 +64,12 @@ export function normalizeFloorplan(input) {
           v.check(Math.abs(polygonArea(room.points)) >= 0.25, `${path} is too small (under 0.25 m²)`);
         }
       }
+      roomExtras[i] = roomSettings(room, path, v);
     });
   }
 
   const deviceIds = new Set();
+  const deviceExtras = [];
   if (v.array(devices, 'devices', { max: 1000 })) {
     devices.forEach((d, i) => {
       const path = `devices[${i}]`;
@@ -77,23 +81,26 @@ export function normalizeFloorplan(input) {
       if (d.roomId !== undefined && d.roomId !== null) v.check(roomIds.has(d.roomId), `${path}.roomId ${d.roomId} is not a room in this plan`);
       v.check(Array.isArray(d.position) && d.position.length === 3 && d.position.every(coord) && d.position[1] >= 0,
         `${path}.position must be [x, y, z] in meters with y (height) at least 0`);
+      deviceExtras[i] = placementSettings(d, path, v);
     });
   }
   v.throwIfInvalid();
 
   const round = (n) => Math.round(n * 1000) / 1000;
   return {
-    rooms: rooms.map((r) => ({
+    rooms: rooms.map((r, i) => ({
       id: r.id ?? slugify(r.name),
       name: r.name.trim(),
       floor: r.floor ?? 0,
       height: r.height ?? 2.5,
       points: r.points.map(([x, z]) => [round(x), round(z)]),
+      ...roomExtras[i],
     })),
-    devices: devices.map((d) => ({
+    devices: devices.map((d, i) => ({
       deviceId: d.deviceId,
       roomId: d.roomId ?? null,
       position: d.position.map(round),
+      ...deviceExtras[i],
     })),
   };
 }
