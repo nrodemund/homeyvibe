@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { HttpError } from '../http/errors.js';
 
 /**
  * In-memory registry of every device known to any provider.
@@ -65,16 +66,12 @@ export class DeviceRegistry extends EventEmitter {
   /** Send a command to a device through its provider. Throws on invalid input. */
   async command(id, values) {
     const device = this.#devices.get(id);
-    if (!device) throw new RegistryError(404, `Unknown device ${id}`);
+    if (!device) throw new HttpError(404, `Unknown device ${id}`);
     const provider = this.#providers.get(device.provider);
-    if (!provider) throw new RegistryError(500, `Provider ${device.provider} not loaded`);
+    if (!provider) throw new HttpError(500, `Provider ${device.provider} not loaded`);
     return provider.command(device, values);
   }
 }
 
-export class RegistryError extends Error {
-  constructor(status, message) {
-    super(message);
-    this.status = status;
-  }
-}
+// Kept as an alias so providers can keep importing RegistryError.
+export { HttpError as RegistryError };

@@ -1,45 +1,48 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { createServer } from 'node:http';
 import { DeviceRegistry } from '../src/devices/registry.js';
 import { createZigbee2mqttProvider } from '../src/providers/zigbee2mqtt/index.js';
-import { createApiHandler } from '../src/http/api.js';
-import { FakeMqttClient, bridgeDevices } from './helpers.js';
+import { FakeMqttClient, bridgeDevices, startApi, api } from './helpers.js';
 
-let server, base, client;
+let ctx, client;
 
 before(async () => {
   client = new FakeMqttClient();
   const registry = new DeviceRegistry();
   createZigbee2mqttProvider({ client, registry });
   client.receive('zigbee2mqtt/bridge/devices', bridgeDevices);
-  server = createServer(createApiHandler({ registry }));
-  await new Promise((r) => server.listen(0, r));
-  base = `http://127.0.0.1:${server.address().port}`;
+  ctx = await startApi(registry);
 });
-after(() => server.close());
+after(() => ctx.close());
 
-test('GET /api/health', async () => {
-  const res = await fetch(`${base}/api/health`);
-  assert.deepEqual(await res.json(), { ok: true, name: 'homeyvibe', devices: 3 });
+test('GET /api/health is public', async () => {
+  const res = await api(ctx.base, null, '/api/health');
+  assert.deepEqual(await res.json(), { ok: true, name: 'homeyvibe' });
 });
 
 test('GET /api/devices and /api/devices/:id', async () => {
-  const list = await (await fetch(`${base}/api/devices`)).json();
+  const list = await (await api(ctx.base, ctx.tokens.guest, '/api/devices')).json();
   assert.equal(list.length, 3);
-  const one = await fetch(`${base}/api/devices/${encodeURIComponent('z2m:0x0017880100000001')}`);
+  const one = await api(ctx.base, ctx.tokens.guest, `/api/devices/${encodeURIComponent('z2m:0x0017880100000001')}`);
   assert.equal((await one.json()).name, 'living_room_lamp');
-  assert.equal((await fetch(`${base}/api/devices/nope`)).status, 404);
+  assert.equal((await api(ctx.base, ctx.tokens.guest, '/api/devices/nope')).status, 404);
 });
 
 test('POST /api/devices/:id/set', async () => {
-  const url = `${base}/api/devices/z2m:0x0017880100000001/set`;
-  const ok = await fetch(url, { method: 'POST', body: JSON.stringify({ state: 'TOGGLE' }) });
+  const path = '/api/devices/z2m:0x0017880100000001/set';
+  const ok = await api(ctx.base, ctx.tokens.member, path, { method: 'POST', body: { state: 'TOGGLE' } });
   assert.equal(ok.status, 202);
   assert.equal(client.published.at(-1).topic, 'zigbee2mqtt/living_room_lamp/set');
-  const bad = await fetch(url, { method: 'POST', body: JSON.stringify({ brightness: -1 }) });
+  const bad = await api(ctx.base, ctx.tokens.member, path, { method: 'POST', body: { brightness: -1 } });
   assert.equal(bad.status, 400);
   assert.match((await bad.json()).error, />= 0/);
-  const junk = await fetch(url, { method: 'POST', body: '{' });
+  const junk = await api(ctx.base, ctx.tokens.member, path, { method: 'POST', body: '{' });
   assert.equal(junk.status, 400);
+});
+
+test('unknown routes and wrong methods', async () => {
+  assert.equal((await api(ctx.base, ctx.tokens.admin, '/api/nope')).status, 404);
+  const res = await api(ctx.base, ctx.tokens.admin, '/api/devices', { method: 'DELETE' });
+  assert.equal(res.status, 405);
+  assert.equal(res.headers.get('allow'), 'GET');
 });
