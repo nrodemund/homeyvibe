@@ -5,6 +5,8 @@ import { importConfig } from '../ai/importer.js';
 import { handleMcpRequest } from '../ai/mcp.js';
 import { scopedRegistry } from '../auth/access.js';
 import { aiToolkit, systemBlocks, DEFAULT_MODEL } from '../ai/chat.js';
+import { normalizeFloorplan } from '../config/floorplan.js';
+import { checkPlacementSettings, visibleFloorplan } from '../config/floorplan-settings.js';
 
 const MAX_BODY = 64 * 1024;
 const COOKIE = 'hv_session';
@@ -26,6 +28,7 @@ const COOKIE_MAX_AGE_S = 30 * 24 * 60 * 60;
  *   GET|PUT|DELETE /api/integrations/zigbee2mqtt   config:write: diagnostics, save settings, restore deployment defaults
  *   POST /api/integrations/zigbee2mqtt/retry        config:write: reconnect and rediscover
  *   GET  /api/devices/:id                     devices:read
+ *   GET  /api/devices/:id/history             devices:read for a visible numeric capability (?property=...)
  *   POST /api/devices/:id/set                 devices:control
  *   GET  /api/events                          devices:read (Server-Sent Events)
  *   GET  /api/roles                           any signed-in user
@@ -34,6 +37,7 @@ const COOKIE_MAX_AGE_S = 30 * 24 * 60 * 60;
  *   PATCH  /api/users/:id                     users:manage, or self for displayName/password
  *   DELETE /api/users/:id                     users:manage
  *   GET  /api/pages, /api/pages/:id           devices:read
+ *   PUT  /api/pages/order                    config:write: reorder pages by id
  *   POST /api/pages, PATCH|DELETE /api/pages/:id         config:write
  *   GET  /api/actions, /api/actions/:id       devices:read
  *   POST /api/actions, PATCH|DELETE /api/actions/:id     config:write
@@ -59,6 +63,7 @@ export function createApiHandler({ registry, auth, pages, actions, engine, aiSet
   const devicesFor = (user) => (access ? scopedRegistry(registry, access.policyFor(user)) : registry);
   /** The registry as the AI sees it when acting for this person. */
   const devicesForAi = (user) => (access ? scopedRegistry(registry, access.aiFor(user).policy) : registry);
+  const floorplanFor = (user, plan) => visibleFloorplan(plan, access?.policyFor(user), can(user, PERMISSIONS.DEVICES_CONTROL));
   const aiDeps = { registry, pages, actions, engine, floorplan, access, zigbee };
   const routes = [
     ['GET', '/api/health', { public: true }, () => ({ ok: true, name: 'homeyvibe' })],
@@ -98,20 +103,36 @@ export function createApiHandler({ registry, auth, pages, actions, engine, aiSet
       if (!device) throw new HttpError(404, 'Unknown device');
       return device;
     }],
+    ['GET', '/api/devices/:id/history', { permission: PERMISSIONS.DEVICES_READ }, ({ params, user, url }) => {
+      const device = devicesFor(user).get(params.id);
+      if (!device) throw new HttpError(404, 'Unknown device');
+      const property = url.searchParams.get('property');
+      if (!device.capabilities.some((cap) => cap.property === property && cap.readable && cap.type === 'numeric')) {
+        throw new HttpError(400, 'Choose a readable numeric device property');
+      }
+      return { points: registry.history(device.id, property) };
+    }],
     ['POST', '/api/devices/:id/set', { permission: PERMISSIONS.DEVICES_CONTROL, status: 202 }, ({ params, body, user }) =>
       devicesFor(user).command(params.id, body)],
     ['GET', '/api/events', { permission: PERMISSIONS.DEVICES_READ, raw: true }, ({ req, res, user }) =>
       streamEvents(req, res, { registry, pages, actions, engine, floorplan, access, user })],
 
     ...(floorplan ? [
-      ['GET', '/api/floorplan', { permission: PERMISSIONS.DEVICES_READ }, ({ user }) => {
-        const plan = floorplan.get();
-        const policy = access?.policyFor(user);
-        return policy ? { ...plan, devices: plan.devices.filter((d) => policy.canSee(d.deviceId)) } : plan;
+      ['GET', '/api/floorplan', { permission: PERMISSIONS.DEVICES_READ }, ({ user }) => floorplanFor(user, floorplan.get())],
+      ['PUT', '/api/floorplan', { permission: PERMISSIONS.CONFIG_WRITE }, ({ body, user }) => {
+        const plan = normalizeFloorplan(body);
+        const errors = checkPlacementSettings(plan, floorplan.get(), {
+          registry: devicesFor(user), lookupAction: (id) => actions?.get(id),
+          canControl: can(user, PERMISSIONS.DEVICES_CONTROL),
+        });
+        if (errors.length) throw new HttpError(400, errors.join('; '));
+        return floorplan.replace(plan);
       }],
-      ['PUT', '/api/floorplan', { permission: PERMISSIONS.CONFIG_WRITE }, ({ body }) => floorplan.replace(body)],
     ] : []),
-    ...(pages ? crudRoutes('pages', pages, 'page') : []),
+    ...(pages ? [
+      ...crudRoutes('pages', pages, 'page'),
+      ['PUT', '/api/pages/order', { permission: PERMISSIONS.CONFIG_WRITE }, ({ body }) => pages.reorder(body.ids)],
+    ] : []),
     ...(actions ? crudRoutes('actions', actions, 'action') : []),
     ...(pages && actions ? [
       ['GET', '/api/ai/context', { permission: PERMISSIONS.DEVICES_READ, raw: true }, ({ res, user }) => {
@@ -120,7 +141,9 @@ export function createApiHandler({ registry, auth, pages, actions, engine, aiSet
           'content-disposition': 'attachment; filename="homeyvibe-context.md"',
           'cache-control': 'no-store',
         });
-        res.end(buildContext({ registry: devicesForAi(user), pages, actions, floorplan }));
+        const aiUser = access?.aiFor(user).user ?? user;
+        const aiFloorplan = floorplan && { get: () => visibleFloorplan(floorplan.get(), access?.aiFor(user).policy, can(aiUser, PERMISSIONS.DEVICES_CONTROL)) };
+        res.end(buildContext({ registry: devicesForAi(user), pages, actions, floorplan: aiFloorplan }));
       }],
       ['POST', '/api/ai/import', { permission: PERMISSIONS.CONFIG_WRITE }, ({ body, user }) =>
         importConfig({ bundle: body, pages, actions, registry: devicesFor(user), floorplan })],
@@ -198,7 +221,7 @@ export function createApiHandler({ registry, auth, pages, actions, engine, aiSet
       if (req.method !== 'GET' && fromCookie) checkSameOrigin(req);
 
       const body = ['POST', 'PATCH', 'PUT'].includes(req.method) ? await readJson(req) : undefined;
-      const result = await route.handler({ req, res, params, body, user, token });
+      const result = await route.handler({ req, res, params, body, user, token, url });
       if (route.opts.raw) return;
       send(res, route.opts.status ?? 200, result ?? { ok: true });
     } catch (err) {
@@ -341,7 +364,7 @@ function streamEvents(req, res, { registry, pages, actions, engine, floorplan, a
     const shown = visible(device);
     if (shown) emit('device', shown);
   };
-  const onRemoved = (device) => emit('removed', { id: device.id });
+  const onRemoved = (device) => { if (!policy || policy.canSee(device.id)) emit('removed', { id: device.id }); };
   const onState = (device, changes) => {
     if (!policy || policy.canSee(device.id)) emit('state', { id: device.id, changes });
   };
@@ -357,7 +380,7 @@ function streamEvents(req, res, { registry, pages, actions, engine, floorplan, a
   const onPages = () => emit('pages', pages.list());
   const onActions = () => emit('actions', actions.list());
   const onRun = (result) => emit('run', result);
-  const onFloorplan = (plan) => emit('floorplan', plan);
+  const onFloorplan = (plan) => emit('floorplan', visibleFloorplan(plan, policy, can(user, PERMISSIONS.DEVICES_CONTROL)));
   floorplan?.on('changed', onFloorplan);
   pages?.on('changed', onPages);
   actions?.on('changed', onActions);

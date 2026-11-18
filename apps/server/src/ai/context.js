@@ -55,6 +55,7 @@ A page is a dashboard tab:
 - layout: one of ${LAYOUTS.join(', ')}
 - items: \`{ "type": "device", "deviceId", "properties"? }\` (omit properties to show every capability) or \`{ "type": "action", "actionId" }\`
 - id is generated from the title unless given (lowercase letters, numbers, dashes)
+- use integer order to sort tabs and startPage: true for the single page to open by default
 
 ## Action format
 
@@ -99,6 +100,11 @@ Pages with layout "3d" show the home's floor plan with devices placed in it. The
 - Coordinates are meters seen from above; points are the room's corners in order as [x, z]; neighbouring rooms share walls
 - position is [x, height above the floor, z]; ceiling lights sit near the ceiling, sensors and switches around 1.2–1.5
 - room ids are generated from names; floor 0 is the ground floor
+- room style can set floorColor, wallColor, edgeColor, wallHeight, wallThickness, wallOpacity and edges (true/false); use hex colors
+- room openings contains { type: "door" or "window", edge, offset, width, bottom, height }; edge indexes the first corner from 0 and sizes are in meters
+- device display can set mode (auto, value, color, badge, bar, gauge, chart, trend, thermometer, threshold, status, icon), property, min, max, threshold, lowColor and highColor
+- device click defaults to opening details; other modes are command (with values for that device), action (with actionId), message (with message text shown in HomeyVibe), and none
+- device light can set enabled, strength from 0 to 2, and color for lights in the room
 - A 3D page shows the devices listed in its sections, or every placed device when it lists none
 
 ## Good configuration

@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { HttpError } from '../http/errors.js';
+import { DeviceHistory } from './history.js';
 
 /**
  * In-memory registry of every device known to any provider.
@@ -12,6 +13,7 @@ import { HttpError } from '../http/errors.js';
 export class DeviceRegistry extends EventEmitter {
   #devices = new Map();
   #providers = new Map();
+  #history = new DeviceHistory();
 
   registerProvider(provider) {
     this.#providers.set(provider.id, provider);
@@ -31,6 +33,7 @@ export class DeviceRegistry extends EventEmitter {
       ? { ...existing, ...device, state: existing.state }
       : { state: {}, available: true, ...device };
     this.#devices.set(device.id, merged);
+    if (!existing) this.#history.record(merged, merged.state);
     this.emit(existing ? 'device:updated' : 'device:added', merged);
     return merged;
   }
@@ -53,7 +56,12 @@ export class DeviceRegistry extends EventEmitter {
     const device = this.#devices.get(id);
     if (!device) return;
     device.state = { ...device.state, ...changes };
+    this.#history.record(device, changes);
     this.emit('state', device, changes, metadata);
+  }
+
+  history(id, property) {
+    return this.#history.get(id, property);
   }
 
   setAvailable(id, available) {

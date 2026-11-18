@@ -2,6 +2,7 @@ import { HttpError } from '../http/errors.js';
 import { normalizePage } from '../config/pages.js';
 import { normalizeAction } from '../config/actions.js';
 import { normalizeFloorplan } from '../config/floorplan.js';
+import { checkPlacementSettings } from '../config/floorplan-settings.js';
 import { slugify } from '../config/validate.js';
 import { validateValue } from '../providers/zigbee2mqtt/capabilities.js';
 
@@ -12,7 +13,7 @@ import { validateValue } from '../providers/zigbee2mqtt/capabilities.js';
  *
  * @returns {{ created: { pages: string[], actions: string[] }, updated: { pages: string[], actions: string[] }, floorplan?: { rooms: number, devices: number } }}
  */
-export function importConfig({ bundle, pages, actions, registry, floorplan = null }) {
+export function importConfig({ bundle, pages, actions, registry, floorplan = null, canControl = true }) {
   if (!bundle || typeof bundle !== 'object' || Array.isArray(bundle)) {
     throw new HttpError(400, 'Expected an object like { "pages": [...], "actions": [...] }');
   }
@@ -54,7 +55,18 @@ export function importConfig({ bundle, pages, actions, registry, floorplan = nul
   }
 
   // Cross-references: devices, capabilities and actions must exist.
-  const actionIds = new Set([...actions.list().map((a) => a.id), ...normalizedActions.map((a) => a.id)]);
+  const actionsById = new Map([...actions.list(), ...normalizedActions].map((a) => [a.id, a]));
+  if (normalizedPages.filter((page) => page.startPage).length > 1) errors.push('Only one page can be the start page');
+  if (plan) {
+    const previous = floorplan.get();
+    const old = new Map(previous.devices.map((entry) => [entry.deviceId, entry]));
+    for (const entry of plan.devices) {
+      const click = old.get(entry.deviceId)?.click;
+      if (!entry.click && ['command', 'action'].includes(click?.mode) &&
+        (!canControl || registry.get(entry.deviceId)?.access === 'view')) entry.click = click;
+    }
+    errors.push(...checkPlacementSettings(plan, previous, { registry, lookupAction: (id) => actionsById.get(id), canControl }));
+  }
   const checkDevice = (path, deviceId, properties = [], values = null) => {
     const device = registry.get(deviceId);
     if (!device) return errors.push(`${path}: unknown device ${deviceId}`);
@@ -82,7 +94,7 @@ export function importConfig({ bundle, pages, actions, registry, floorplan = nul
           }
         }
       }
-      if (s.type === 'run' && !actionIds.has(s.actionId)) errors.push(`actions[${i}].steps[${j}]: unknown action ${s.actionId}`);
+      if (s.type === 'run' && !actionsById.has(s.actionId)) errors.push(`actions[${i}].steps[${j}]: unknown action ${s.actionId}`);
     });
     a.triggers.forEach((t, j) => {
       if (t.type === 'state') checkDevice(`actions[${i}].triggers[${j}]`, t.deviceId, [t.property]);
@@ -92,7 +104,7 @@ export function importConfig({ bundle, pages, actions, registry, floorplan = nul
     p.sections.forEach((s, j) => s.items.forEach((item, k) => {
       const path = `pages[${i}].sections[${j}].items[${k}]`;
       if (item.type === 'device') checkDevice(path, item.deviceId, item.properties ?? []);
-      else if (!actionIds.has(item.actionId)) errors.push(`${path}: unknown action ${item.actionId}`);
+      else if (!actionsById.has(item.actionId)) errors.push(`${path}: unknown action ${item.actionId}`);
     }));
   });
   if (errors.length) throw new HttpError(400, errors.join('; '));

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   autoPlace, bounds, centroid, deviceSummary, floorsOf, lightLevel, pointInPolygon, polygonArea, roomAt, wallSegments,
 } from '../src/floorplan.js';
+import { arrangeMarkers, chartPoints, displayCapabilities, markerReading, mergeHistory, pageIdForHash, roomWalls, wallPieces } from '../src/floorplan-visuals.js';
 
 const square = (x, z, size = 4) => [[x, z], [x + size, z], [x + size, z + size], [x, z + size]];
 const lightCaps = [
@@ -80,4 +81,56 @@ test('limits helpers: ranges, entries and summaries', async () => {
   assert.deepEqual(entryFor(limits, 'new'), { access: 'view', ranges: {} });
   assert.equal(summarize(limits), 'new devices view only · 1 hidden · 1 value range');
   assert.equal(summarize({ default: 'control', devices: {} }), 'No limits');
+});
+
+test('sensor styles read the right capability, scale values, and distinguish no reading', () => {
+  assert.deepEqual(displayCapabilities(sensor, 'status'), []);
+  assert.deepEqual(displayCapabilities(sensor, 'chart').map((cap) => cap.property), ['temperature', 'humidity']);
+  const adjusted = markerReading(sensor, { mode: 'threshold', property: 'temperature', min: 18, max: 24, threshold: 20 });
+  assert.equal(adjusted.text, '21.5 °C');
+  assert.equal(adjusted.active, true);
+  assert.ok(Math.abs(adjusted.fraction - 0.5766667) < 0.00001);
+  assert.equal(markerReading({ ...sensor, state: {} }, { mode: 'threshold' }).active, null);
+  assert.equal(markerReading(lamp, { mode: 'status', property: 'state' }).active, true);
+  assert.equal(lightLevel({ ...lamp, available: false }), 0);
+});
+
+test('the history plot uses real time and merges a snapshot with newer live measurements', () => {
+  const now = 100_000_000;
+  const points = mergeHistory([
+    [[0, 15], [now - 43_200_000, 20], [now - 1200, 24]],
+    [[now - 1000, 25], [now, 30]],
+  ], now);
+  assert.deepEqual(points, [[now - 43_200_000, 20], [now, 30]]);
+  assert.deepEqual(chartPoints(points, { min: 20, max: 30 }, now, 100, 40), [[50, 40], [100, 0]]);
+});
+
+test('shared wall openings work from either direction and cut only the opening area', () => {
+  const rooms = [
+    { points: square(0, 0, 3) },
+    { points: square(3, 0, 3), openings: [{ edge: 3, offset: 0.5, width: 1, bottom: 0.8, height: 1 }] },
+  ];
+  const wall = roomWalls(rooms).find((candidate) => candidate.rooms.length === 2);
+  assert.equal(wall.openings[0].offset, 1.5);
+  const pieces = wallPieces(wall.length, 2.5, wall.openings);
+  const area = pieces.reduce((sum, p) => sum + (p.to - p.from) * (p.top - p.bottom), 0);
+  assert.equal(area, 3 * 2.5 - 1);
+  assert.deepEqual(pieces.filter((p) => p.from === 1.5 && p.to === 2.5).map((p) => [p.bottom, p.top]), [[0, 0.8], [1.8, 2.5]]);
+});
+
+test('root opens the chosen page while explicit navigation and All devices still work', () => {
+  const pages = [{ id: 'home', startPage: true }, { id: 'kitchen' }];
+  assert.equal(pageIdForHash('', pages), 'home');
+  assert.equal(pageIdForHash('#/', pages), null);
+  assert.equal(pageIdForHash('#/page/kitchen', pages), 'kitchen');
+  assert.equal(pageIdForHash('', pages.slice(1)), null);
+});
+
+test('adjacent device labels have distinct hit areas', () => {
+  const first = { x: 100, y: 70, w: 70, h: 30 };
+  const second = { ...first, x: 105 };
+  const [[, firstCenter], [, secondCenter]] = arrangeMarkers([first, second], 300, 180);
+  const firstTop = first.y - firstCenter * first.h;
+  const secondTop = second.y - secondCenter * second.h;
+  assert.ok(secondTop + second.h < firstTop);
 });

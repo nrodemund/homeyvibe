@@ -8,6 +8,7 @@ import { openZigbeeDialog } from './zigbee.js';
 import { openConfigDialog } from './config.js';
 
 import { ICONS } from '../floorplan.js';
+import { pageIdForHash } from '../floorplan-visuals.js';
 
 /**
  * Device dashboard. Returns a cleanup function.
@@ -44,7 +45,6 @@ export function renderDashboard(root, user, onSignedOut) {
   let floorplan = null; // loaded with the first 3D page
   let home3d = null; // the live 3D view, kept while its page stays open
   let home3dPage = null;
-  let home3dProps = new Map();
   const conn = app.querySelector('.conn');
   const empty = app.querySelector('.empty');
   const menu = app.querySelector('.menu');
@@ -98,7 +98,9 @@ export function renderDashboard(root, user, onSignedOut) {
       devices.set(d.id, d);
       if (isNew) renderView();
       home3d?.update(d);
-      if (!isNew) for (const card of cardEls(d.id)) card.replaceWith(renderCard(d, card.dataset.properties ? card.dataset.properties.split(',') : null));
+      if (!isNew) for (const card of cardEls(d.id)) if (!card.closest('.stage-panel')) {
+        card.replaceWith(renderCard(d, card.dataset.properties ? card.dataset.properties.split(',') : null));
+      }
     });
     source.addEventListener('removed', (e) => {
       devices.delete(JSON.parse(e.data).id);
@@ -127,7 +129,7 @@ export function renderDashboard(root, user, onSignedOut) {
       if (!d) return;
       d.state = { ...d.state, ...changes };
       updateValues(d, Object.keys(changes));
-      home3d?.update(d);
+      home3d?.update(d, changes);
     });
   }
 
@@ -156,8 +158,7 @@ export function renderDashboard(root, user, onSignedOut) {
   }
 
   function currentPageId() {
-    const m = /^#\/page\/(.+)$/.exec(location.hash);
-    return m ? decodeURIComponent(m[1]) : null;
+    return pageIdForHash(location.hash, pages);
   }
 
   function renderTabs() {
@@ -212,16 +213,14 @@ export function renderDashboard(root, user, onSignedOut) {
   function render3d(page) {
     const ids = [];
     const hints = new Map();
-    home3dProps = new Map();
     for (const sec of page.sections) {
       for (const item of sec.items) {
         if (item.type !== 'device') continue;
         ids.push(item.deviceId);
         if (sec.title) hints.set(item.deviceId, sec.title);
-        if (item.properties) home3dProps.set(item.deviceId, item.properties);
       }
     }
-    const deviceIds = ids.length ? ids : null;
+    const deviceIds = ids.length ? [...new Set(ids)] : null;
     if (home3d && home3dPage === page.id) {
       home3d.setDevices(deviceIds, hints);
       return home3d.el;
@@ -239,7 +238,12 @@ export function renderDashboard(root, user, onSignedOut) {
           deviceIds,
           hints,
           canEdit,
-          renderCard: (d) => renderCard(d, home3dProps.get(d.id) ?? null),
+          canControl,
+          listActions: () => actions,
+          renderCard,
+          fetchHistory: api.deviceHistory,
+          sendCommand: api.setDevice,
+          runAction: api.runAction,
           onSave: async (next) => (floorplan = await api.saveFloorplan(next)),
         });
         placeholder.replaceWith(home3d.el);
