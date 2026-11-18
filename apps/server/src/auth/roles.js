@@ -29,8 +29,10 @@ export function isRole(role) {
   return Object.hasOwn(ROLES, role);
 }
 
+/** Uses the user's effective permissions when given (e.g. narrowed for the AI), else their role's. */
 export function can(user, permission) {
-  return Boolean(user && ROLES[user.role]?.permissions.includes(permission));
+  if (!user) return false;
+  return (user.permissions ?? ROLES[user.role]?.permissions ?? []).includes(permission);
 }
 
 export function permissionsFor(role) {

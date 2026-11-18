@@ -5,10 +5,14 @@ Simple and secure smart home. Host it on your Raspberry Pi.
 
 HomeyVibe finds your devices by itself, lets an AI set up pages and automations for you, and then gets out of the way. You control your home from the web, as an installable app on your phone, or by asking the assistant.
 
-<p align="center">
-  <img src="docs/screenshots/3d-page-desktop.png" alt="HomeyVibe 3D floor plan with live devices" width="72%" />
-  <img src="docs/screenshots/assistant-chat-phone.png" alt="HomeyVibe assistant on a phone" width="22%" />
-</p>
+- **Auto-detect everything.** Find devices and their capabilities automatically. Full zigbee2mqtt support, with more providers pluggable.
+- **Configure with AI.** Use direct connectors (Codex, Claude) or upload a context file. The AI finds devices, learns their capabilities, creates UI pages and creates actions.
+- **Control by UI or AI.** Every device and action is reachable both ways.
+- **Multiple page designs**, including 3D views of your floor plan built with three.js.
+- **Room scanning** in the PWA to create a floor layout.
+- **Users and roles**, with per-device limits and value ranges for people and for the AI's own user.
+- **Gateways.** A server applet bridges cloud to mobile with end-to-end encryption.
+- **Runs everywhere.** Web, PWA, and Electron desktop.
 
 ## Why HomeyVibe
 
@@ -53,26 +57,19 @@ npm run dev -w @homeyvibe/web       # http://localhost:5173
 npm test
 ```
 
-Sign in, then open **Set up with AI** in the user menu to connect Claude or Codex, to download a context file for any AI, or to add a Claude API key for the built-in assistant (the ✦ button).
+Sign in, then open the ✦ assistant and add a Claude API key on that device, or open **Set up with AI** in the user menu to connect Claude Code or Codex, or to download a context file for any AI.
 
 With real hardware, start the server with `MQTT_URL=mqtt://your-broker:1883 npm run dev -w @homeyvibe/server` instead. See [apps/server](apps/server/README.md) and [apps/web](apps/web/README.md).
 
-### Layout
+## Running on a Raspberry Pi
 
-```
-apps/
-  server/    Node.js backend (device providers, automation, API, MCP)
-  web/       Vite frontend (web + PWA)
-  desktop/   Electron shell (planned)
-packages/
-  shared/    Shared types and protocol definitions
-docker/      Container configuration (Caddy)
-docs/        Architecture and deployment notes
-```
+The server is meant to run on small hardware such as a Raspberry Pi (Node 22, a few tens of MB of RAM). It only stores configuration, talks to zigbee2mqtt and controls devices. **All AI work happens on the device you configure from**, and the Pi doesn't need internet access for it:
 
-## Security
+- **Assistant in the app (✦).** Each phone or computer saves its own Claude API key in the browser and calls Claude directly. The server only runs the tools (`GET`/`POST /api/ai/tools`), with the same permissions and limits as everywhere else. The key never reaches the server.
+- **Claude Code, Codex or another MCP app on your computer.** These connect to the Pi's `/mcp` endpoint with a personal access token.
+- **A context file for any AI.** Download it, ask the AI, and paste the answer back.
 
-Please report vulnerabilities privately, see [SECURITY.md](SECURITY.md).
+Optionally, an admin can store a shared key on the server instead. The server then calls Claude for devices that have no key of their own.
 
 ## License
 

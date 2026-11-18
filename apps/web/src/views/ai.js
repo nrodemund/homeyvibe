@@ -1,12 +1,13 @@
 import { api, request } from '../api.js';
 import { h, onSubmit, toast } from '../ui.js';
 import { field } from './auth.js';
+import { deviceKey } from '../ai/client-chat.js';
 
 /** "AI setup" dialog: connect Claude/Codex over MCP, or use a context file with any LLM. */
 export async function openAiDialog(user) {
   const canConfigure = user.permissions.includes('config:write');
   const mcpUrl = `${location.origin}/mcp`;
-  const tokens = await api.tokens();
+  const [tokens, aiStatus] = await Promise.all([api.tokens(), api.aiSettings().catch(() => null)]);
 
   const tokenList = h('ul.token-list');
   const reveal = h('div.reveal');
@@ -35,6 +36,9 @@ export async function openAiDialog(user) {
       ),
       canConfigure ? importForm() : null,
     ),
+
+    deviceBlock(),
+    canConfigure && aiStatus ? assistantBlock(aiStatus) : null,
   );
   dialog.addEventListener('close', () => dialog.remove());
 
@@ -106,6 +110,63 @@ export async function openAiDialog(user) {
       textarea.value = '';
     });
     return form;
+  }
+
+  function deviceBlock() {
+    const state = h('p.muted', { role: 'status' });
+    const forget = h('button.icon-button', {
+      type: 'button',
+      onclick: () => {
+        deviceKey.clear();
+        describe();
+      },
+    }, 'Forget key on this device');
+    const describe = () => {
+      const hint = deviceKey.hint();
+      state.textContent = hint
+        ? `The assistant runs on this device with key ${hint}. Your server only runs the tools.`
+        : 'No key on this device. Open the ✦ assistant to add one; it stays in this browser.';
+      forget.hidden = !hint;
+    };
+    describe();
+    return h('section.ai-block', {},
+      h('h3', {}, '3. Assistant on this device'),
+      h('p.muted', {}, 'Chat with Claude in HomeyVibe. Claude is called from your phone or computer, so a small server like a Raspberry Pi does no AI work and needs no internet access for it.'),
+      state,
+      forget,
+    );
+  }
+
+  function assistantBlock(status) {
+    const state = h('p.muted', { role: 'status' });
+    const describe = (s) => {
+      state.textContent = s.configured
+        ? `Connected${s.keyHint ? ` with key ${s.keyHint}` : ' through the server environment'} · model ${s.model}`
+        : 'Not set up. Add a Claude API key to use the chat button in the corner.';
+    };
+    describe(status);
+    const form = h('form.inline-form', {},
+      field('Claude API key', h('input', { name: 'apiKey', type: 'password', placeholder: 'sk-ant-…', autocomplete: 'off', required: true })),
+      h('button.primary', { type: 'submit' }, status.configured ? 'Replace key' : 'Save key'),
+      h('p.form-error', { role: 'alert' }),
+    );
+    onSubmit(form, async ({ apiKey }) => {
+      describe(await api.updateAiSettings({ apiKey }));
+      form.reset();
+    });
+    const remove = status.source === 'settings'
+      ? h('button.icon-button', { type: 'button', onclick: async () => {
+        describe(await api.updateAiSettings({ apiKey: null }));
+        remove.remove();
+      } }, 'Remove saved key')
+      : null;
+    return h('section.ai-block', {},
+      h('h3', {}, '4. Or a shared key on the server'),
+      h('p.muted', {}, 'Optional: devices without their own key then use this one, and the server calls Claude. Usage is billed to this key.'),
+      state,
+      form,
+      remove,
+    );
   }
 
   renderTokens();

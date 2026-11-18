@@ -45,9 +45,20 @@ Passwords are hashed with scrypt. Sessions are random tokens (only their SHA-256
 
 Behind a reverse proxy, keep the `Host` header (or set `X-Forwarded-Host`) and `X-Forwarded-Proto: https` so cookies get the `Secure` flag.
 
+## Limits and the HomeyVibe AI user
+
+Admins can limit what a person (not an admin) or the AI may do, under **People**:
+
+- per device: **Control**, **View only** or **Hidden**, plus a default for new devices
+- value ranges on writable numbers, e.g. a radiator's target temperature only between 18 and 22 °C
+
+The AI has its own entry ("HomeyVibe AI") with two extra switches: *can control devices* and *can change pages, actions and the floor plan*. Whenever the AI acts (the in-app chat, MCP, the context file) it gets only what both the person using it and the AI user may do. Limits are checked on every path: device commands, running actions (every step is checked first, so nothing runs half way), actions the AI writes, and floor plan edits (the AI cannot remove devices it cannot see). Hidden devices are left out of `/api/devices`, the event stream and the AI's view. Automations triggered by state or time are not limited.
+
+`GET /api/access`, `PUT /api/access/ai` and `PUT /api/access/users/:id` (users:manage) read and change them; see `src/auth/access.js`.
+
 ## Pages and actions
 
-**Pages** are dashboard tabs. Each has a title, optional icon, a layout (`grid`, `list`, or `3d` for later) and sections. A section holds items: a device (optionally limited to some `properties`) or an action button.
+**Pages** are dashboard tabs. Each has a title, optional icon, a layout (`grid`, `list` or `3d`) and sections. A section holds items: a device (optionally limited to some `properties`) or an action button.
 
 ```json
 { "title": "Living room", "icon": "🛋️", "sections": [
@@ -68,9 +79,29 @@ Behind a reverse proxy, keep the `Host` header (or set `X-Forwarded-Host`) and `
 
 Ids are generated from the title or name (`living-room`) unless given. Validation returns every problem in one 400 response, which helps AI clients fix everything in one go. A triggered action won't re-trigger within 2 seconds, so it can't loop on its own state changes.
 
+## Floor plan (3D pages)
+
+Pages with layout `3d` show one shared floor plan with live devices in it. `GET /api/floorplan` (devices:read) returns it and `PUT /api/floorplan` (config:write) replaces it; changes stream as the `floorplan` event.
+
+```json
+{ "rooms": [{ "name": "Living room", "floor": 0, "height": 2.5, "points": [[0, 0], [5, 0], [5, 4], [0, 4]] }],
+  "devices": [{ "deviceId": "z2m:0x…", "roomId": "living-room", "position": [2.5, 2.2, 2] }] }
+```
+
+Coordinates are meters seen from above (`points` are `[x, z]` corners in order; `position` is `[x, height, z]`). Room ids come from names. A 3D page shows the devices listed in its sections, or every placed device when it lists none. The AI can edit the plan with the `save_floorplan` tool or a `floorplan` key in an import bundle, and room scanning will write it too.
+
 ## AI configuration
 
 Two ways to let an AI find devices, build pages and create actions. Both are under **Set up with AI** in the web app's user menu.
+
+### Client-side assistant (recommended, e.g. for a Raspberry Pi)
+
+The web app's assistant calls Claude from the browser with a key kept on that device. The server only describes and runs the tools:
+
+- `GET /api/ai/tools` returns `{ model, system, tools }` (JSON Schema inputs) for the signed-in person
+- `POST /api/ai/tools/:name` runs one tool. The body is the tool input and the reply is `{ ok, text }`. It applies the same validation, permissions and limits as MCP.
+
+Any client (the desktop app, a script) can drive its own model the same way.
 
 ### MCP server (Claude, Codex, any MCP client)
 
@@ -104,6 +135,15 @@ The prompt `set_up_my_home` asks the AI to propose pages and actions and apply t
 ### Context file (any AI)
 
 `GET /api/ai/context` downloads a Markdown file describing every device, the current pages and actions, and the formats. Give it to any AI, then paste its JSON answer into the import box (`POST /api/ai/import`, admins). Imports are checked against real devices, capabilities and value ranges, and nothing is saved unless everything is valid.
+
+### Server-side assistant (optional)
+
+When a device has no key of its own, the chat button can use a shared key on the server instead. The server then calls Claude (`claude-opus-5-5` by default) with the same tools as the MCP server, limited by each person's role. An admin adds the key under **Set up with AI** (stored in the data directory and never sent back to browsers), or sets `ANTHROPIC_API_KEY` for the server. Usage is billed to that key.
+
+- `POST /api/ai/chat` with `{ message, conversationId? }` streams Server-Sent Events: `start`, `text` (`delta`), `tool` / `tool_result`, `done`, `error`.
+- Turning things on and off happens straight away. The assistant describes deletions and bulk configuration changes first and waits for a yes.
+- Conversations are kept in memory for 6 hours (10 per person).
+- Requests use server-side refusal fallbacks (`fallbacks: "default"`) and prompt caching for the tool definitions and instructions.
 
 ### Access tokens
 

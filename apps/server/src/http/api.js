@@ -3,6 +3,8 @@ import { PERMISSIONS, ROLES, can } from '../auth/roles.js';
 import { buildContext } from '../ai/context.js';
 import { importConfig } from '../ai/importer.js';
 import { handleMcpRequest } from '../ai/mcp.js';
+import { scopedRegistry } from '../auth/access.js';
+import { aiToolkit, systemBlocks, DEFAULT_MODEL } from '../ai/chat.js';
 
 const MAX_BODY = 64 * 1024;
 const COOKIE = 'hv_session';
@@ -33,13 +35,28 @@ const COOKIE_MAX_AGE_S = 30 * 24 * 60 * 60;
  *   POST /api/pages, PATCH|DELETE /api/pages/:id         config:write
  *   GET  /api/actions, /api/actions/:id       devices:read
  *   POST /api/actions, PATCH|DELETE /api/actions/:id     config:write
- *   POST /api/actions/:id/run                 devices:control
+ *   POST /api/actions/:id/run                 devices:control (checked against the person's limits)
+ *   GET  /api/access                          users:manage: { ai, users } device limits (see auth/access.js)
+ *   PUT  /api/access/ai                       users:manage: { canControl, canConfigure, default, devices }
+ *   PUT  /api/access/users/:id                users:manage: { default, devices } for a non-admin
  *   GET|POST /api/auth/tokens, DELETE /api/auth/tokens/:id   own access tokens
  *   GET  /api/ai/context                      devices:read (Markdown for any LLM)
+ *   GET  /api/floorplan                       devices:read: { rooms, devices } (see config/floorplan.js)
+ *   PUT  /api/floorplan                       config:write: replace the floor plan
  *   POST /api/ai/import                       config:write ({ pages, actions } from an LLM)
+ *   GET  /api/ai/tools                        devices:read: { model, system, tools } for a client-side AI chat
+ *   POST /api/ai/tools/:name                  devices:read: run one tool with the AI's limits -> { ok, text }
  *   POST /mcp                                 MCP (Streamable HTTP, stateless), Bearer token
+ *   GET  /api/ai/settings                     signed in: { configured, source, keyHint, model }
+ *   PATCH /api/ai/settings                    config:write: { apiKey?, model? }
+ *   POST /api/ai/chat                         devices:read: { message, conversationId? } -> SSE
+ *   DELETE /api/ai/chat/:id                   forget a conversation
  */
-export function createApiHandler({ registry, auth, pages, actions, engine }) {
+export function createApiHandler({ registry, auth, pages, actions, engine, aiSettings, chat, floorplan = null, access = null }) {
+  /** The registry as this person may see and use it. */
+  const devicesFor = (user) => (access ? scopedRegistry(registry, access.policyFor(user)) : registry);
+  /** The registry as the AI sees it when acting for this person. */
+  const devicesForAi = (user) => (access ? scopedRegistry(registry, access.aiFor(user).policy) : registry);
   const routes = [
     ['GET', '/api/health', { public: true }, () => ({ ok: true, name: 'homeyvibe' })],
 
@@ -66,35 +83,77 @@ export function createApiHandler({ registry, auth, pages, actions, engine }) {
     ['GET', '/api/roles', {}, () =>
       Object.entries(ROLES).map(([id, r]) => ({ id, label: r.label, description: r.description, permissions: r.permissions }))],
 
-    ['GET', '/api/devices', { permission: PERMISSIONS.DEVICES_READ }, () => registry.list()],
-    ['GET', '/api/devices/:id', { permission: PERMISSIONS.DEVICES_READ }, ({ params }) => {
-      const device = registry.get(params.id);
+    ['GET', '/api/devices', { permission: PERMISSIONS.DEVICES_READ }, ({ user }) => devicesFor(user).list()],
+    ['GET', '/api/devices/:id', { permission: PERMISSIONS.DEVICES_READ }, ({ params, user }) => {
+      const device = devicesFor(user).get(params.id);
       if (!device) throw new HttpError(404, 'Unknown device');
       return device;
     }],
-    ['POST', '/api/devices/:id/set', { permission: PERMISSIONS.DEVICES_CONTROL, status: 202 }, ({ params, body }) =>
-      registry.command(params.id, body)],
-    ['GET', '/api/events', { permission: PERMISSIONS.DEVICES_READ, raw: true }, ({ req, res }) =>
-      streamEvents(req, res, { registry, pages, actions, engine })],
+    ['POST', '/api/devices/:id/set', { permission: PERMISSIONS.DEVICES_CONTROL, status: 202 }, ({ params, body, user }) =>
+      devicesFor(user).command(params.id, body)],
+    ['GET', '/api/events', { permission: PERMISSIONS.DEVICES_READ, raw: true }, ({ req, res, user }) =>
+      streamEvents(req, res, { registry, pages, actions, engine, floorplan, access, user })],
 
+    ...(floorplan ? [
+      ['GET', '/api/floorplan', { permission: PERMISSIONS.DEVICES_READ }, ({ user }) => {
+        const plan = floorplan.get();
+        const policy = access?.policyFor(user);
+        return policy ? { ...plan, devices: plan.devices.filter((d) => policy.canSee(d.deviceId)) } : plan;
+      }],
+      ['PUT', '/api/floorplan', { permission: PERMISSIONS.CONFIG_WRITE }, ({ body }) => floorplan.replace(body)],
+    ] : []),
     ...(pages ? crudRoutes('pages', pages, 'page') : []),
     ...(actions ? crudRoutes('actions', actions, 'action') : []),
     ...(pages && actions ? [
-      ['GET', '/api/ai/context', { permission: PERMISSIONS.DEVICES_READ, raw: true }, ({ res }) => {
+      ['GET', '/api/ai/context', { permission: PERMISSIONS.DEVICES_READ, raw: true }, ({ res, user }) => {
         res.writeHead(200, {
           'content-type': 'text/markdown; charset=utf-8',
           'content-disposition': 'attachment; filename="homeyvibe-context.md"',
           'cache-control': 'no-store',
         });
-        res.end(buildContext({ registry, pages, actions }));
+        res.end(buildContext({ registry: devicesForAi(user), pages, actions, floorplan }));
       }],
-      ['POST', '/api/ai/import', { permission: PERMISSIONS.CONFIG_WRITE }, ({ body }) =>
-        importConfig({ bundle: body, pages, actions, registry })],
+      ['POST', '/api/ai/import', { permission: PERMISSIONS.CONFIG_WRITE }, ({ body, user }) =>
+        importConfig({ bundle: body, pages, actions, registry: devicesFor(user), floorplan })],
+      // For clients that run the model themselves (the Pi only runs the tools).
+      ['GET', '/api/ai/tools', { permission: PERMISSIONS.DEVICES_READ }, ({ user }) => ({
+        model: aiSettings?.model() ?? DEFAULT_MODEL,
+        system: systemBlocks(user),
+        tools: aiToolkit({ user, deps: { registry, pages, actions, engine, floorplan, access } }).definitions,
+      })],
+      ['POST', '/api/ai/tools/:name', { permission: PERMISSIONS.DEVICES_READ }, ({ user, params, body }) =>
+        aiToolkit({ user, deps: { registry, pages, actions, engine, floorplan, access }, by: `client-ai:${user.username}` }).run(params.name, body)],
       ['POST', '/mcp', { permission: PERMISSIONS.DEVICES_READ, raw: true }, ({ req, res, body, user }) =>
-        handleMcpRequest({ req, res, body, user, deps: { registry, pages, actions, engine } })],
+        handleMcpRequest({ req, res, body, user, deps: { registry, pages, actions, engine, floorplan, access } })],
     ] : []),
-    ...(engine ? [['POST', '/api/actions/:id/run', { permission: PERMISSIONS.DEVICES_CONTROL }, ({ params, user }) =>
-      engine.run(params.id, { by: `user:${user.username}` })]] : []),
+    ...(aiSettings ? [
+      ['GET', '/api/ai/settings', {}, () => aiSettings.status()],
+      ['PATCH', '/api/ai/settings', { permission: PERMISSIONS.CONFIG_WRITE }, ({ body }) =>
+        aiSettings.update(pick(body, ['apiKey', 'model']))],
+    ] : []),
+    ...(chat ? [
+      ['POST', '/api/ai/chat', { permission: PERMISSIONS.DEVICES_READ, raw: true }, ({ req, res, body, user }) =>
+        streamChat({ req, res, body, user, chat })],
+      ['DELETE', '/api/ai/chat/:id', {}, ({ user, params }) => {
+        chat.reset(user.id, params.id);
+        return { ok: true };
+      }],
+    ] : []),
+    ...(engine ? [['POST', '/api/actions/:id/run', { permission: PERMISSIONS.DEVICES_CONTROL }, ({ params, user }) => {
+      const scoped = devicesFor(user);
+      if (scoped.check) engine.preflight(params.id, scoped.check);
+      return engine.run(params.id, { by: `user:${user.username}` });
+    }]] : []),
+    ...(access ? [
+      ['GET', '/api/access', { permission: PERMISSIONS.USERS_MANAGE }, () => access.all()],
+      ['PUT', '/api/access/ai', { permission: PERMISSIONS.USERS_MANAGE }, ({ body }) => access.setAi(body)],
+      ['PUT', '/api/access/users/:id', { permission: PERMISSIONS.USERS_MANAGE }, ({ params, body }) => {
+        const target = auth.getUser(params.id);
+        if (!target) throw new HttpError(404, 'Unknown user');
+        if (target.role === 'admin') throw new HttpError(400, 'Admins always have full access');
+        return access.setUser(params.id, body);
+      }],
+    ] : []),
 
     ['GET', '/api/users', { permission: PERMISSIONS.USERS_MANAGE }, () => auth.listUsers()],
     ['POST', '/api/users', { permission: PERMISSIONS.USERS_MANAGE, status: 201 }, ({ body }) => auth.createUser(body)],
@@ -109,6 +168,7 @@ export function createApiHandler({ registry, auth, pages, actions, engine }) {
     ['DELETE', '/api/users/:id', { permission: PERMISSIONS.USERS_MANAGE }, ({ user, params }) => {
       if (params.id === user.id) throw new HttpError(409, 'You cannot delete yourself');
       auth.deleteUser(params.id);
+      access?.removeUser(params.id);
       return { ok: true };
     }],
   ].map(([method, path, opts, handler]) => ({ method, ...compile(path), opts, handler }));
@@ -232,20 +292,55 @@ function pick(obj, keys) {
   return Object.fromEntries(keys.filter((k) => obj?.[k] !== undefined).map((k) => [k, obj[k]]));
 }
 
+/** Run a chat turn, streaming events as SSE. Errors before the first event become normal JSON errors. */
+async function streamChat({ req, res, body, user, chat }) {
+  const controller = new AbortController();
+  res.on('close', () => { if (!res.writableFinished) controller.abort(); });
+  const emit = (event, data) => {
+    if (!res.headersSent) {
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
+    }
+    if (!res.writableEnded) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+  try {
+    await chat.send({ user, conversationId: body.conversationId, message: body.message, emit, signal: controller.signal });
+  } catch (err) {
+    if (!res.headersSent) throw err;
+    if (!controller.signal.aborted) {
+      emit('error', { message: Number.isInteger(err.status) ? err.message : 'Something went wrong' });
+      if (!Number.isInteger(err.status)) console.error(err);
+    }
+  }
+  res.end();
+}
+
 const HEARTBEAT_MS = 25_000;
 
-function streamEvents(req, res, { registry, pages, actions, engine }) {
+function streamEvents(req, res, { registry, pages, actions, engine, floorplan, access, user }) {
+  let policy = access?.policyFor(user) ?? null;
+  const visible = (device) => (policy ? policy.decorate(device) : device);
   res.writeHead(200, {
     'content-type': 'text/event-stream',
     'cache-control': 'no-cache',
     connection: 'keep-alive',
   });
   const emit = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-  emit('snapshot', registry.list());
+  const snapshot = () => emit('snapshot', registry.list().map(visible).filter(Boolean));
+  snapshot();
 
-  const onDevice = (device) => emit('device', device);
+  const onDevice = (device) => {
+    const shown = visible(device);
+    if (shown) emit('device', shown);
+  };
   const onRemoved = (device) => emit('removed', { id: device.id });
-  const onState = (device, changes) => emit('state', { id: device.id, changes });
+  const onState = (device, changes) => {
+    if (!policy || policy.canSee(device.id)) emit('state', { id: device.id, changes });
+  };
+  const onAccess = () => {
+    policy = access.policyFor(user);
+    snapshot();
+  };
+  access?.on('changed', onAccess);
   registry.on('device:added', onDevice);
   registry.on('device:updated', onDevice);
   registry.on('device:removed', onRemoved);
@@ -253,6 +348,8 @@ function streamEvents(req, res, { registry, pages, actions, engine }) {
   const onPages = () => emit('pages', pages.list());
   const onActions = () => emit('actions', actions.list());
   const onRun = (result) => emit('run', result);
+  const onFloorplan = (plan) => emit('floorplan', plan);
+  floorplan?.on('changed', onFloorplan);
   pages?.on('changed', onPages);
   actions?.on('changed', onActions);
   engine?.on('run', onRun);
@@ -267,6 +364,8 @@ function streamEvents(req, res, { registry, pages, actions, engine }) {
     pages?.off('changed', onPages);
     actions?.off('changed', onActions);
     engine?.off('run', onRun);
+    floorplan?.off('changed', onFloorplan);
+    access?.off('changed', onAccess);
   });
 }
 

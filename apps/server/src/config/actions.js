@@ -164,6 +164,20 @@ export class ActionEngine extends EventEmitter {
     clearInterval(this.#timer);
   }
 
+  /**
+   * Check every set step (including nested actions) with `check(deviceId, values)`, which throws
+   * on a step that is not allowed. Used before someone with limits runs an action.
+   */
+  preflight(id, check, depth = 0) {
+    const action = this.actions.get(id);
+    if (!action) throw new HttpError(404, `Unknown action ${id}`);
+    if (depth > MAX_DEPTH) throw new HttpError(400, `Action nesting deeper than ${MAX_DEPTH}`);
+    for (const step of action.steps) {
+      if (step.type === 'set') check(step.deviceId, step.values);
+      else if (step.type === 'run') this.preflight(step.actionId, check, depth + 1);
+    }
+  }
+
   /** Run an action now. `by` describes who started it, e.g. "user:niklas", "trigger", "ai". */
   async run(id, { by = 'manual', depth = 0 } = {}) {
     const action = this.actions.get(id);

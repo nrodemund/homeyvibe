@@ -96,7 +96,7 @@ test('GET /api/ai/context downloads Markdown; POST /api/ai/import needs config:w
   assert.equal(res.status, 200);
   assert.match(res.headers.get('content-type'), /text\/markdown/);
   assert.match(res.headers.get('content-disposition'), /homeyvibe-context\.md/);
-  assert.match(await res.text(), /Devices \(4\)/);
+  assert.match(await res.text(), /Devices \(5\)/);
 
   const bundle = { pages: [{ title: 'Imported', sections: [] }] };
   assert.equal((await api(ctx.base, ctx.tokens.member, '/api/ai/import', { method: 'POST', body: bundle })).status, 403);
@@ -144,7 +144,7 @@ test('MCP: admin sees tools, reads the home, configures it, and controls devices
     assert.ok(saveAction.inputSchema.properties.action, 'save_action has a typed action schema');
 
     const overview = JSON.parse(text(await client.callTool({ name: 'get_home_overview', arguments: {} })));
-    assert.equal(overview.devices.length, 4);
+    assert.equal(overview.devices.length, 5);
     assert.equal(overview.you.role, 'admin');
 
     const found = JSON.parse(text(await client.callTool({ name: 'list_devices', arguments: { query: 'blind' } })));
