@@ -1,0 +1,49 @@
+[
+  {
+    "id": "living_room_lamp", "name": "Living room lamp", "vendor": "Philips", "model": "LCT015",
+    "description": "Hue white and color ambiance E26/E27",
+    "state": { "state": "ON", "brightness": 180, "color_temp": 300, "linkquality": 120 },
+    "exposes": [
+      { "type": "light", "features": [
+        { "type": "binary", "name": "state", "label": "Power", "property": "state", "access": 7, "value_on": "ON", "value_off": "OFF", "value_toggle": "TOGGLE" },
+        { "type": "numeric", "name": "brightness", "label": "Brightness", "property": "brightness", "access": 7, "value_min": 0, "value_max": 254 },
+        { "type": "numeric", "name": "color_temp", "label": "Color temperature", "property": "color_temp", "access": 7, "unit": "mired", "value_min": 150, "value_max": 500 }
+      ] },
+      { "type": "enum", "name": "effect", "label": "Effect", "property": "effect", "access": 2, "values": ["blink", "breathe", "okay"] },
+      { "type": "numeric", "name": "linkquality", "label": "Link quality", "property": "linkquality", "access": 1, "unit": "lqi", "category": "diagnostic" }
+    ]
+  },
+  {
+    "id": "bathroom_sensor", "name": "Bathroom sensor", "vendor": "Aqara", "model": "WSDCGQ11LM",
+    "description": "Temperature, humidity and pressure sensor",
+    "state": { "temperature": 22.4, "humidity": 55, "battery": 87 },
+    "exposes": [
+      { "type": "numeric", "name": "temperature", "label": "Temperature", "property": "temperature", "access": 1, "unit": "°C" },
+      { "type": "numeric", "name": "humidity", "label": "Humidity", "property": "humidity", "access": 1, "unit": "%" },
+      { "type": "numeric", "name": "battery", "label": "Battery", "property": "battery", "access": 1, "unit": "%", "value_min": 0, "value_max": 100, "category": "diagnostic" }
+    ]
+  },
+  {
+    "id": "hallway_switch", "name": "Hallway switch", "vendor": "Aqara", "model": "QBKG12LM",
+    "description": "Smart wall switch, two gangs",
+    "state": { "state_left": "OFF", "state_right": "ON" },
+    "exposes": [
+      { "type": "switch", "endpoint": "left", "features": [
+        { "type": "binary", "name": "state", "label": "Left", "property": "state_left", "endpoint": "left", "access": 7, "value_on": "ON", "value_off": "OFF" } ] },
+      { "type": "switch", "endpoint": "right", "features": [
+        { "type": "binary", "name": "state", "label": "Right", "property": "state_right", "endpoint": "right", "access": 7, "value_on": "ON", "value_off": "OFF" } ] }
+    ]
+  },
+  {
+    "id": "bedroom_blind", "name": "Bedroom blind", "vendor": "IKEA", "model": "E1757",
+    "description": "FYRTUR roller blind",
+    "state": { "state": "OPEN", "position": 100, "battery": 64 },
+    "exposes": [
+      { "type": "cover", "features": [
+        { "type": "enum", "name": "state", "label": "Motion", "property": "state", "access": 3, "values": ["OPEN", "CLOSE", "STOP"] },
+        { "type": "numeric", "name": "position", "label": "Position", "property": "position", "access": 7, "unit": "%", "value_min": 0, "value_max": 100 }
+      ] },
+      { "type": "numeric", "name": "battery", "label": "Battery", "property": "battery", "access": 1, "unit": "%", "value_min": 0, "value_max": 100, "category": "diagnostic" }
+    ]
+  }
+]

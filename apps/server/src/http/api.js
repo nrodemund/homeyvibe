@@ -8,6 +8,7 @@ const MAX_BODY = 64 * 1024;
  *   GET  /api/devices
  *   GET  /api/devices/:id
  *   POST /api/devices/:id/set   body: { property: value, ... }
+ *   GET  /api/events            Server-Sent Events: snapshot, device, removed, state
  */
 export function createApiHandler({ registry }) {
   return async function handle(req, res) {
@@ -18,6 +19,10 @@ export function createApiHandler({ registry }) {
 
       if (parts[1] === 'health' && parts.length === 2 && req.method === 'GET') {
         return send(res, 200, { ok: true, name: 'homeyvibe', devices: registry.list().length });
+      }
+
+      if (parts[1] === 'events' && parts.length === 2 && req.method === 'GET') {
+        return streamEvents(req, res, registry);
       }
 
       if (parts[1] === 'devices') {
@@ -38,6 +43,35 @@ export function createApiHandler({ registry }) {
       if (status === 500) console.error(err);
     }
   };
+}
+
+const HEARTBEAT_MS = 25_000;
+
+function streamEvents(req, res, registry) {
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache',
+    connection: 'keep-alive',
+  });
+  const emit = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  emit('snapshot', registry.list());
+
+  const onDevice = (device) => emit('device', device);
+  const onRemoved = (device) => emit('removed', { id: device.id });
+  const onState = (device, changes) => emit('state', { id: device.id, changes });
+  registry.on('device:added', onDevice);
+  registry.on('device:updated', onDevice);
+  registry.on('device:removed', onRemoved);
+  registry.on('state', onState);
+  const heartbeat = setInterval(() => res.write(': ping\n\n'), HEARTBEAT_MS);
+
+  res.on('close', () => {
+    clearInterval(heartbeat);
+    registry.off('device:added', onDevice);
+    registry.off('device:updated', onDevice);
+    registry.off('device:removed', onRemoved);
+    registry.off('state', onState);
+  });
 }
 
 function send(res, status, body) {

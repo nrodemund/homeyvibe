@@ -6,6 +6,7 @@ Node.js backend. Providers discover devices and their capabilities and put them 
 
 ```sh
 MQTT_URL=mqtt://your-broker:1883 npm run dev
+npm run demo   # simulated devices, no broker needed
 npm test
 ```
 
@@ -35,4 +36,5 @@ Each capability has `property`, `name`, `type` (`binary`, `numeric`, `enum`, `te
 | GET | `/api/health` | Status and device count |
 | GET | `/api/devices` | All devices with capabilities and state |
 | GET | `/api/devices/:id` | One device |
+| GET | `/api/events` | Server-Sent Events: `snapshot` (all devices) on connect, then `device`, `removed`, `state` (`{ id, changes }`) |
 | POST | `/api/devices/:id/set` | Body `{ "brightness": 120, "state": "ON" }`. Validated against capabilities, then sent to the device. Returns 202. |
