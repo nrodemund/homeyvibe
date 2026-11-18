@@ -1,7 +1,25 @@
-const app = document.querySelector('#app');
-app.textContent = 'HomeyVibe';
+import './style.css';
+import { api } from './api.js';
+import { renderSetup, renderLogin } from './views/auth.js';
+import { renderDashboard } from './views/dashboard.js';
 
-fetch('/api/health')
-  .then((r) => r.json())
-  .then((s) => { app.textContent = `HomeyVibe (server ok: ${s.ok})`; })
-  .catch(() => { app.textContent = 'HomeyVibe (server offline)'; });
+const root = document.querySelector('#app');
+
+async function start() {
+  let user;
+  try {
+    const status = await api.status();
+    user = status.user ?? (status.needsSetup ? await renderSetup(root) : await renderLogin(root));
+  } catch (err) {
+    root.textContent = `Cannot reach the HomeyVibe server (${err.message}). Retrying…`;
+    setTimeout(start, 3000);
+    return;
+  }
+  renderDashboard(root, user, start);
+}
+
+start();
+
+if ('serviceWorker' in navigator && import.meta.env.PROD) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}

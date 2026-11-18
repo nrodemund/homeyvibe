@@ -1,0 +1,13 @@
+{
+  "name": "HomeyVibe",
+  "short_name": "HomeyVibe",
+  "description": "Your smart home, set up by AI.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#111318",
+  "theme_color": "#4f6bed",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
