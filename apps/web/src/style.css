@@ -584,3 +584,38 @@ dialog.panel input[type=search] {
 .chat-mode { display: block; font-size: 0.72rem; color: var(--muted); }
 .link-button { background: none; border: none; padding: 0; color: var(--accent); font: inherit; font-size: 0.85rem; cursor: pointer; text-align: left; }
 .link-button:hover { text-decoration: underline; }
+.settings-fields {
+  display: grid;
+  gap: .75rem;
+  min-width: 0;
+}
+
+fieldset.settings-fields {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.settings-fields[hidden], .settings-fields [hidden] {
+  display: none;
+}
+
+.settings-fields .row {
+  flex-wrap: wrap;
+}
+
+.config-entry {
+  justify-content: space-between;
+}
+
+.config-group {
+  margin: 0;
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.grid.list {
+  grid-template-columns: minmax(0, 1fr);
+}

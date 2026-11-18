@@ -13,6 +13,12 @@ Vite frontend, installable as a PWA. Shows every discovered device as a card wit
 
 State streams live from `GET /api/events` (Server-Sent Events), so changes from wall switches, automations or other clients show up immediately.
 
+## Configuration
+
+Admins can use **Zigbee2MQTT** in the user menu to connect a broker and check discovery. **Pages** edits dashboard layouts, sections and controls. **Actions** edits scenes and routines with device settings, delays and time or state triggers.
+
+Under **Set up with AI**, connect Codex over MCP, download a context file for ChatGPT, or select OpenAI or Claude for the optional shared assistant.
+
 ## 3D pages
 
 Pages with layout `3d` render the home's floor plan with three.js (loaded only when such a page opens). Lights glow with their brightness, every device has a live label, and tapping one opens its controls. Admins can choose **Edit layout** to draw rooms by dragging on the floor, rename or delete rooms, drag devices into place, set their height, and place devices that are not in the plan yet. Devices without a position are guessed from room names in the device name or its page section.

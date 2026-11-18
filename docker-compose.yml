@@ -13,12 +13,14 @@ services:
     image: ghcr.io/nrodemund/homeyvibe:${HOMEYVIBE_TAG:-latest}
     restart: unless-stopped
     environment:
-      MQTT_URL: ${MQTT_URL-mqtt://mosquitto:1883}
+      MQTT_URL: ${MQTT_URL-auto}
       MQTT_USERNAME: ${MQTT_USERNAME:-}
       MQTT_PASSWORD: ${MQTT_PASSWORD:-}
-      Z2M_BASE_TOPIC: ${Z2M_BASE_TOPIC:-zigbee2mqtt}
+      Z2M_BASE_TOPIC: ${Z2M_BASE_TOPIC:-}
       HOMEYVIBE_DEMO: ${HOMEYVIBE_DEMO:-0}
       TZ: ${TZ:-Etc/UTC}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - homeyvibe-data:/data
 

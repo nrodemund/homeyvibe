@@ -7,7 +7,7 @@ HomeyVibe ships as two small images, built for `linux/amd64`, `linux/arm64` (Ras
 | `ghcr.io/nrodemund/homeyvibe` | Node.js server: device providers, API, MCP endpoint. Stores everything in `/data`. |
 | `ghcr.io/nrodemund/homeyvibe-web` | Caddy serving the web app/PWA, forwarding `/api` and `/mcp` to the server. |
 
-Only the web container is published on the network (port 80 by default). The AI configuration runs on your phone or computer (Claude, Codex, the built-in assistant via the Claude API), so the Pi only serves HomeyVibe and never runs a model.
+Only the HomeyVibe web container is published on the network (port 80 by default). AI configuration can run from your phone or computer. With a shared AI key, the Pi sends API requests to the selected provider. Models run remotely.
 
 ## Install
 
@@ -18,7 +18,7 @@ sudo usermod -aG docker $USER && newgrp docker
 mkdir ~/homeyvibe && cd ~/homeyvibe
 curl -fsSLO https://raw.githubusercontent.com/nrodemund/homeyvibe/main/docker-compose.yml
 curl -fsSL -o .env https://raw.githubusercontent.com/nrodemund/homeyvibe/main/docker/.env.example
-nano .env                                        # optional, defaults work for most setups
+nano .env                                        # optional, for deployment settings
 docker compose up -d
 ```
 
@@ -38,7 +38,16 @@ zigbee2mqtt's own UI is on port 8081. On its very first start it may ask you to 
 
 ### Existing MQTT broker
 
-Set `MQTT_URL` (and `MQTT_USERNAME` / `MQTT_PASSWORD` if needed) in `.env` and start without the profile.
+Start without the `zigbee` profile so HomeyVibe can use your existing Mosquitto instance. The default search tries the bundled Docker service name `mosquitto`, the Docker host address `host.docker.internal` and loopback for a native install. It selects a broker when it receives a Zigbee2MQTT device catalog.
+
+If it comes up empty, open the user menu → **Zigbee2MQTT**. Use **Enter a broker address** and copy the MQTT server, username, password and base topic from Zigbee2MQTT’s MQTT configuration. HomeyVibe reconnects as soon as you save. The status shows connection, authentication, topic permissions and the number of paired devices in the catalog.
+
+- **Mosquitto on the Pi itself:** Use the Pi’s LAN IP with Mosquitto’s port, typically `mqtt://192.168.1.20:1883`. The Compose file also maps `host.docker.internal` to the Docker host. Mosquitto needs a listener reachable from the HomeyVibe container. A listener bound to `127.0.0.1` is only reachable on the Pi itself.
+- **Mosquitto in a separate Compose project:** Use the broker’s published address, or connect HomeyVibe’s server and Mosquitto to the same Docker network and use the broker’s service name.
+- **Mosquitto on another machine:** Use its hostname or IP and MQTT port. Use `mqtts://` for TLS, with a certificate the HomeyVibe server trusts.
+- **Custom Zigbee2MQTT topics:** Enter the exact `mqtt.base_topic` when it contains slashes, multiple bridges exist, or the MQTT account lacks wildcard subscription permissions. With a blank field, HomeyVibe detects a single-level topic.
+
+You can also set `MQTT_URL`, `MQTT_USERNAME`, `MQTT_PASSWORD` and `Z2M_BASE_TOPIC` in `.env`. Saved settings take precedence. Use **Restore deployment defaults** to switch back to the environment.
 
 ## Settings (`.env`)
 
@@ -46,9 +55,9 @@ Set `MQTT_URL` (and `MQTT_USERNAME` / `MQTT_PASSWORD` if needed) in `.env` and s
 |---|---|---|
 | `HOMEYVIBE_PORT` | `80` | Port the web app is published on |
 | `HOMEYVIBE_TAG` | `latest` | Image tag to run: `latest` (main branch), `stable` (latest release), or a version such as `1.2` |
-| `MQTT_URL` | `mqtt://mosquitto:1883` | Broker zigbee2mqtt publishes to. Set it to empty to run without MQTT. |
+| `MQTT_URL` | `auto` | Search common local broker addresses. Use a URL for an explicit broker, or leave the value empty to disable MQTT. |
 | `MQTT_USERNAME` / `MQTT_PASSWORD` | | Broker credentials |
-| `Z2M_BASE_TOPIC` | `zigbee2mqtt` | zigbee2mqtt `base_topic` |
+| `Z2M_BASE_TOPIC` | empty | Exact Zigbee2MQTT base topic. A blank value detects a single-level topic. |
 | `HOMEYVIBE_DEMO` | `0` | `1` adds simulated devices and example pages |
 | `UPDATE_INTERVAL` | `3600` | Seconds between update checks |
 | `ZIGBEE_ADAPTER` | `/dev/ttyUSB0` | Zigbee adapter, `zigbee` profile only |
@@ -71,7 +80,7 @@ The updater needs access to the Docker socket to restart containers. It only eve
 
 ## Backups
 
-All HomeyVibe data (users, pages, actions, floor plan, AI settings) is in the `homeyvibe_homeyvibe-data` volume:
+All HomeyVibe data (users, pages, actions, floor plan, AI settings and broker settings) is in the `homeyvibe_homeyvibe-data` volume:
 
 ```sh
 docker run --rm -v homeyvibe_homeyvibe-data:/data -v "$PWD":/backup alpine \

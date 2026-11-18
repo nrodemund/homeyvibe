@@ -2,21 +2,23 @@ import { parseExposes, validateValue } from './capabilities.js';
 import { RegistryError } from '../../devices/registry.js';
 
 export const PROVIDER_ID = 'zigbee2mqtt';
+const CATALOG = '/bridge/devices';
+const BRIDGE_STATE = '/bridge/state';
+const DISCOVERY_WINDOW_MS = 750;
 
-/**
- * zigbee2mqtt provider. Discovers devices from `<base>/bridge/devices`, tracks
- * live state from `<base>/<friendly_name>` and availability from
- * `<base>/<friendly_name>/availability`.
- *
- * @param {object} opts
- * @param {import('mqtt').MqttClient} opts.client connected (or connecting) MQTT client
- * @param {import('../../devices/registry.js').DeviceRegistry} opts.registry
- * @param {string} [opts.baseTopic]
- * @param {(msg: string) => void} [opts.log]
- */
-export function createZigbee2mqttProvider({ client, registry, baseTopic = 'zigbee2mqtt', log = () => {} }) {
-  const byFriendlyName = new Map(); // friendly_name -> device id
-  const base = baseTopic.replace(/\/+$/, '');
+/** Discover the retained device catalog, then subscribe to the exact topics for those devices. */
+export function createZigbee2mqttProvider({
+  client, registry, baseTopic = 'zigbee2mqtt', report = () => {}, discoveryWindow = DISCOVERY_WINDOW_MS,
+}) {
+  let base = baseTopic.replace(/\/+$/, '');
+  let bridgeOnline = null;
+  let ready = false;
+  let disposed = false;
+  let timer;
+  let subscribed = new Set();
+  const candidates = new Map();
+  const names = new Map();
+  const availability = new Map();
 
   const provider = {
     id: PROVIDER_ID,
@@ -31,73 +33,163 @@ export function createZigbee2mqttProvider({ client, registry, baseTopic = 'zigbe
         if (err) errors.push(err);
       }
       if (errors.length) throw new RegistryError(400, errors.join('; '));
-      await publish(`${base}/${device.meta.friendlyName}/set`, JSON.stringify(values));
+      const name = device.meta.friendlyName;
+      if (!client.connected || !ready || bridgeOnline === false || names.get(name) !== device.id) {
+        throw new RegistryError(503, 'Zigbee2MQTT is offline or still discovering devices');
+      }
+      await new Promise((resolve, reject) =>
+        client.publish(`${base}/${name}/set`, JSON.stringify(values), (err) => (err ? reject(err) : resolve())),
+      );
       return { sent: values };
+    },
+    close() {
+      disposed = true;
+      disconnect();
+      client.off('connect', connect);
+      client.off('close', disconnect);
+      client.off('message', onMessage);
     },
   };
 
-  function publish(topic, payload) {
-    return new Promise((resolve, reject) =>
-      client.publish(topic, payload, (err) => (err ? reject(err) : resolve())),
-    );
+  function subscribe(topics) {
+    if (!topics.length) return;
+    client.subscribe(topics, (err, grants, packet) => {
+      if (disposed || !client.connected) return;
+      const failed = packet?.granted
+        ? topics.filter((topic, index) => packet.granted[index] >= 128)
+        : err ? topics : grants?.filter(({ qos }) => qos >= 128).map(({ topic }) => topic) ?? [];
+      if (failed.includes(base ? `${base}${CATALOG}` : `+${CATALOG}`)) {
+        report({ phase: 'subscription-denied' });
+      } else if (failed.length) {
+        report({ limited: true });
+      }
+    });
+  }
+
+  function connect() {
+    report({ phase: 'waiting', detectedBase: base || null, limited: false });
+    subscribe(base ? [`${base}${CATALOG}`, `${base}${BRIDGE_STATE}`] : [`+${CATALOG}`]);
+  }
+
+  function disconnect() {
+    clearTimeout(timer);
+    timer = undefined;
+    candidates.clear();
+    subscribed.clear();
+    availability.clear();
+    ready = false;
+    bridgeOnline = null;
+    for (const id of names.values()) registry.setAvailable(id, false);
+  }
+
+  function reportCatalog() {
+    if (ready) report({ phase: bridgeOnline === false ? 'bridge-offline' : 'ready', detectedBase: base, deviceCount: names.size });
   }
 
   function handleDevices(list) {
-    if (!Array.isArray(list)) return;
     const keep = new Set();
-    byFriendlyName.clear();
+    const next = new Set();
+    names.clear();
     for (const d of list) {
-      if (d.type === 'Coordinator' || !d.ieee_address) continue;
+      if (d.type === 'Coordinator') continue;
       const id = `z2m:${d.ieee_address}`;
+      const name = d.friendly_name || d.ieee_address;
+      if (!validDeviceTopic(name)) continue;
       keep.add(id);
-      byFriendlyName.set(d.friendly_name, id);
+      names.set(name, id);
+      next.add(`${base}/${name}`);
+      next.add(`${base}/${name}/availability`);
       registry.upsert({
         id,
         provider: PROVIDER_ID,
-        name: d.friendly_name,
+        name,
         model: d.definition?.model ?? d.model_id ?? null,
         vendor: d.definition?.vendor ?? d.manufacturer ?? null,
         description: d.definition?.description ?? null,
         supported: Boolean(d.supported ?? d.definition),
         interviewing: Boolean(d.interviewing),
         capabilities: parseExposes(d.definition?.exposes),
-        meta: { ieee: d.ieee_address, friendlyName: d.friendly_name, powerSource: d.power_source ?? null },
+        available: bridgeOnline !== false && (availability.get(name) ?? true),
+        meta: { ieee: d.ieee_address, friendlyName: name, powerSource: d.power_source ?? null },
       });
     }
     registry.prune(PROVIDER_ID, keep);
-    log(`zigbee2mqtt: ${keep.size} device(s) discovered`);
+    for (const name of availability.keys()) if (!names.has(name)) availability.delete(name);
+    const added = [...next].filter((topic) => !subscribed.has(topic));
+    const removed = [...subscribed].filter((topic) => !next.has(topic));
+    subscribed = next;
+    ready = true;
+    reportCatalog();
+    if (removed.length) client.unsubscribe(removed);
+    subscribe(added);
   }
 
-  function onMessage(topic, payload) {
-    if (!topic.startsWith(`${base}/`)) return;
-    const rest = topic.slice(base.length + 1);
-    if (rest === 'bridge/devices') return handleDevices(parseJson(payload));
-    if (rest.startsWith('bridge/')) return;
-
-    if (rest.endsWith('/availability')) {
-      const id = byFriendlyName.get(rest.slice(0, -'/availability'.length));
-      if (!id) return;
-      const text = payload.toString();
-      const parsed = parseJson(payload);
-      const state = parsed?.state ?? text; // z2m >= 1.30 sends JSON, older sends plain text
-      registry.setAvailable(id, state === 'online');
+  function chooseBase() {
+    timer = undefined;
+    if (candidates.size > 1) {
+      report({ phase: 'multiple-bridges', candidates: [...candidates.keys()].sort() });
       return;
     }
+    const [[topic, list]] = candidates;
+    base = topic;
+    candidates.clear();
+    client.unsubscribe([`+${CATALOG}`]);
+    subscribe([`${base}${CATALOG}`, `${base}${BRIDGE_STATE}`]);
+    handleDevices(list);
+  }
 
-    const id = byFriendlyName.get(rest);
-    if (!id) return; // e.g. "<name>/set", "<name>/get", or unknown device
-    const state = parseJson(payload);
-    if (state && typeof state === 'object') registry.updateState(id, state);
+  function onMessage(topic, payload, packet) {
+    if (base ? topic === `${base}${CATALOG}` : /^[^/]+\/bridge\/devices$/.test(topic)) {
+      const decoded = parseJson(payload);
+      if (!Array.isArray(decoded)) return;
+      const list = decoded.filter((d) => d && typeof d.ieee_address === 'string' && d.ieee_address);
+      if (decoded.length && !list.length) return;
+      if (base) handleDevices(list);
+      else {
+        candidates.set(topic.slice(0, -CATALOG.length), list);
+        timer ??= setTimeout(chooseBase, discoveryWindow);
+      }
+      return;
+    }
+    if (!base || !topic.startsWith(`${base}/`)) return;
+    const rest = topic.slice(base.length + 1);
+    if (rest !== BRIDGE_STATE.slice(1) && !names.has(rest) && !rest.endsWith('/availability')) return;
+    const data = parseJson(payload);
+    if (rest === BRIDGE_STATE.slice(1)) {
+      const state = data?.state ?? payload.toString();
+      if (state !== 'online' && state !== 'offline') return;
+      bridgeOnline = state === 'online';
+      if (!ready && !bridgeOnline) report({ phase: 'bridge-offline', detectedBase: base });
+      for (const [name, id] of names) registry.setAvailable(id, bridgeOnline && (availability.get(name) ?? true));
+      reportCatalog();
+      return;
+    }
+    // A device's name can itself end in /availability. Prefer its exact state topic.
+    if (names.has(rest)) {
+      if (data && typeof data === 'object' && !Array.isArray(data)) {
+        registry.updateState(names.get(rest), data, { retained: packet?.retain === true });
+      }
+      return;
+    }
+    if (rest.endsWith('/availability')) {
+      const name = rest.slice(0, -'/availability'.length);
+      const state = data?.state ?? payload.toString();
+      if (!names.has(name) || (state !== 'online' && state !== 'offline')) return;
+      availability.set(name, state === 'online');
+      registry.setAvailable(names.get(name), bridgeOnline !== false && state === 'online');
+    }
   }
 
   client.on('message', onMessage);
-  client.on('connect', () => {
-    client.subscribe([`${base}/bridge/devices`, `${base}/+`, `${base}/+/availability`]);
-  });
-  if (client.connected) client.subscribe([`${base}/bridge/devices`, `${base}/+`, `${base}/+/availability`]);
-
+  client.on('connect', connect);
+  client.on('close', disconnect);
   registry.registerProvider(provider);
+  if (client.connected) connect();
   return provider;
+}
+
+function validDeviceTopic(name) {
+  return typeof name === 'string' && !/[+#\x00]/.test(name) && name !== 'bridge' && !name.startsWith('bridge/');
 }
 
 function parseJson(payload) {

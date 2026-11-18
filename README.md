@@ -26,7 +26,7 @@ HomeyVibe finds your devices by itself, lets an AI set up pages and automations 
 - Pages and actions (scenes and automations with triggers)
 - 3D pages of your floor plan built with three.js
 - Users and roles, plus limits such as "radiator only between 18 and 22 °C"
-- AI configuration via MCP, a built-in assistant, or a context file
+- Manual page, scene and automation editors, with AI configuration via MCP, the built-in assistant, or a context file
 - Planned: room scanning in the PWA to create the floor plan, an end-to-end encrypted cloud gateway, an Electron desktop app
 
 ## Run it on a Raspberry Pi
@@ -42,6 +42,10 @@ docker compose --profile zigbee up -d     # or: also start Mosquitto and zigbee2
 
 Open `http://<your-pi>` and create the first admin account. HomeyVibe updates itself: every change on the `main` branch is built into new images, and the Pi picks them up within an hour. See [docs/docker.md](docs/docker.md) for settings, updates, backups and pinning a version.
 
+Already running Zigbee2MQTT with Mosquitto? Open the user menu → **Zigbee2MQTT** to see the broker and device discovery status. If the automatic search comes up empty, enter the MQTT address, credentials and base topic from your existing Zigbee2MQTT configuration. For a Docker install, use an address reachable from the HomeyVibe container, such as the Pi’s LAN IP or a shared Docker service name.
+
+Use **Pages** and **Actions** in the user menu to build dashboards, scenes and automations manually, or choose **Set up with AI** for the same configuration tools.
+
 Just want a look? Add `HOMEYVIBE_DEMO=1` and `MQTT_URL=` to a `.env` file next to `docker-compose.yml` to get simulated devices with example pages.
 
 ## Where the AI runs
@@ -49,10 +53,10 @@ Just want a look? Add `HOMEYVIBE_DEMO=1` and `MQTT_URL=` to a `.env` file next t
 The server is meant to run on small hardware such as a Raspberry Pi (Node 22, a few tens of MB of RAM). It only stores configuration, talks to zigbee2mqtt and controls devices. **All AI work happens on the device you configure from**, and the Pi doesn't need internet access for it:
 
 - **Assistant in the app (✦).** Each phone or computer saves its own Claude API key in the browser and calls Claude directly. The server only runs the tools (`GET`/`POST /api/ai/tools`), with the same permissions and limits as everywhere else. The key never reaches the server.
-- **Claude Code, Codex or another MCP app on your computer.** These connect to the Pi's `/mcp` endpoint with a personal access token.
-- **A context file for any AI.** Download it, ask the AI, and paste the answer back.
+- **Codex, Claude Code or another MCP app on your computer.** In **Set up with AI**, generate a personal access token and follow the setup for your computer. Codex connects to the Pi’s `/mcp` endpoint from your LAN or VPN. You can use Codex while signed in with your ChatGPT account.
+- **A context file for ChatGPT or another AI.** Download it, ask for a HomeyVibe configuration, and import the returned JSON under **Set up with AI**.
 
-Optionally, an admin can store a shared key on the server instead. The server then calls Claude for devices that have no key of their own.
+Optionally, an admin can select **OpenAI** or **Claude** under **Set up with AI → Shared assistant** and add a project API key. The Pi calls the selected API over HTTPS for browsers without a local Claude key. Usage is billed to the API project.
 
 ## Develop
 

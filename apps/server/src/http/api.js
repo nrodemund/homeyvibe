@@ -23,6 +23,8 @@ const COOKIE_MAX_AGE_S = 30 * 24 * 60 * 60;
  * Signed in (cookie or "Authorization: Bearer <token>"):
  *   GET  /api/auth/me
  *   GET  /api/devices                         devices:read
+ *   GET|PUT|DELETE /api/integrations/zigbee2mqtt   config:write: diagnostics, save settings, restore deployment defaults
+ *   POST /api/integrations/zigbee2mqtt/retry        config:write: reconnect and rediscover
  *   GET  /api/devices/:id                     devices:read
  *   POST /api/devices/:id/set                 devices:control
  *   GET  /api/events                          devices:read (Server-Sent Events)
@@ -47,16 +49,17 @@ const COOKIE_MAX_AGE_S = 30 * 24 * 60 * 60;
  *   GET  /api/ai/tools                        devices:read: { model, system, tools } for a client-side AI chat
  *   POST /api/ai/tools/:name                  devices:read: run one tool with the AI's limits -> { ok, text }
  *   POST /mcp                                 MCP (Streamable HTTP, stateless), Bearer token
- *   GET  /api/ai/settings                     signed in: { configured, source, keyHint, model }
- *   PATCH /api/ai/settings                    config:write: { apiKey?, model? }
+ *   GET  /api/ai/settings                     signed in: { provider, configured, source, keyHint, model }
+ *   PATCH /api/ai/settings                    config:write: { provider?, apiKey?, model? }
  *   POST /api/ai/chat                         devices:read: { message, conversationId? } -> SSE
  *   DELETE /api/ai/chat/:id                   forget a conversation
  */
-export function createApiHandler({ registry, auth, pages, actions, engine, aiSettings, chat, floorplan = null, access = null }) {
+export function createApiHandler({ registry, auth, pages, actions, engine, aiSettings, chat, floorplan = null, access = null, zigbee = null }) {
   /** The registry as this person may see and use it. */
   const devicesFor = (user) => (access ? scopedRegistry(registry, access.policyFor(user)) : registry);
   /** The registry as the AI sees it when acting for this person. */
   const devicesForAi = (user) => (access ? scopedRegistry(registry, access.aiFor(user).policy) : registry);
+  const aiDeps = { registry, pages, actions, engine, floorplan, access, zigbee };
   const routes = [
     ['GET', '/api/health', { public: true }, () => ({ ok: true, name: 'homeyvibe' })],
 
@@ -84,6 +87,12 @@ export function createApiHandler({ registry, auth, pages, actions, engine, aiSet
       Object.entries(ROLES).map(([id, r]) => ({ id, label: r.label, description: r.description, permissions: r.permissions }))],
 
     ['GET', '/api/devices', { permission: PERMISSIONS.DEVICES_READ }, ({ user }) => devicesFor(user).list()],
+    ...(zigbee ? [
+      ['GET', '/api/integrations/zigbee2mqtt', { permission: PERMISSIONS.CONFIG_WRITE }, () => zigbee.status()],
+      ['PUT', '/api/integrations/zigbee2mqtt', { permission: PERMISSIONS.CONFIG_WRITE }, ({ body }) => zigbee.update(body)],
+      ['DELETE', '/api/integrations/zigbee2mqtt', { permission: PERMISSIONS.CONFIG_WRITE }, () => zigbee.reset()],
+      ['POST', '/api/integrations/zigbee2mqtt/retry', { permission: PERMISSIONS.CONFIG_WRITE }, () => zigbee.start()],
+    ] : []),
     ['GET', '/api/devices/:id', { permission: PERMISSIONS.DEVICES_READ }, ({ params, user }) => {
       const device = devicesFor(user).get(params.id);
       if (!device) throw new HttpError(404, 'Unknown device');
@@ -117,19 +126,19 @@ export function createApiHandler({ registry, auth, pages, actions, engine, aiSet
         importConfig({ bundle: body, pages, actions, registry: devicesFor(user), floorplan })],
       // For clients that run the model themselves (the Pi only runs the tools).
       ['GET', '/api/ai/tools', { permission: PERMISSIONS.DEVICES_READ }, ({ user }) => ({
-        model: aiSettings?.model() ?? DEFAULT_MODEL,
+        model: aiSettings?.model('claude') ?? DEFAULT_MODEL,
         system: systemBlocks(user),
-        tools: aiToolkit({ user, deps: { registry, pages, actions, engine, floorplan, access } }).definitions,
+        tools: aiToolkit({ user, deps: aiDeps }).definitions,
       })],
       ['POST', '/api/ai/tools/:name', { permission: PERMISSIONS.DEVICES_READ }, ({ user, params, body }) =>
-        aiToolkit({ user, deps: { registry, pages, actions, engine, floorplan, access }, by: `client-ai:${user.username}` }).run(params.name, body)],
+        aiToolkit({ user, deps: aiDeps, by: `client-ai:${user.username}` }).run(params.name, body)],
       ['POST', '/mcp', { permission: PERMISSIONS.DEVICES_READ, raw: true }, ({ req, res, body, user }) =>
-        handleMcpRequest({ req, res, body, user, deps: { registry, pages, actions, engine, floorplan, access } })],
+        handleMcpRequest({ req, res, body, user, deps: aiDeps })],
     ] : []),
     ...(aiSettings ? [
       ['GET', '/api/ai/settings', {}, () => aiSettings.status()],
       ['PATCH', '/api/ai/settings', { permission: PERMISSIONS.CONFIG_WRITE }, ({ body }) =>
-        aiSettings.update(pick(body, ['apiKey', 'model']))],
+        aiSettings.update(pick(body, ['apiKey', 'model', 'provider']))],
     ] : []),
     ...(chat ? [
       ['POST', '/api/ai/chat', { permission: PERMISSIONS.DEVICES_READ, raw: true }, ({ req, res, body, user }) =>

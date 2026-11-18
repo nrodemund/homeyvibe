@@ -15,7 +15,7 @@ export function createChat(user) {
   const canConfigure = user.permissions.includes('config:write');
   let conversationId = null;
   let busy = false;
-  let mode = null; // 'device': Claude is called from here; 'server': the HomeyVibe server calls it
+  let mode = null; // 'device', 'claude' (server) or 'openai' (server)
   const local = createClientChat();
   const modeNote = h('span.chat-mode');
 
@@ -59,7 +59,7 @@ export function createChat(user) {
     if (!open) return;
     if (deviceKey.get()) return useMode('device');
     const status = await api.aiSettings().catch(() => ({ configured: false }));
-    if (status.configured) useMode('server');
+    if (status.configured) useMode(status.provider ?? 'claude');
     else showSetup();
   }
 
@@ -69,10 +69,11 @@ export function createChat(user) {
       conversationId = null;
       log.replaceChildren();
     }
-    modeNote.textContent = mode === 'device' ? 'Runs on this device' : 'Runs on the server';
+    const provider = mode === 'openai' ? 'OpenAI' : 'Claude';
+    modeNote.textContent = mode === 'device' ? 'Claude · API called from this device' : `${provider} · API called from the server`;
     modeNote.title = mode === 'device'
       ? 'Claude is called from this device with the key saved here; your HomeyVibe server only runs the tools.'
-      : 'Your HomeyVibe server calls Claude with the key saved there.';
+      : `Your HomeyVibe server calls ${provider} with its project key.`;
     showChat();
   }
 
@@ -92,9 +93,9 @@ export function createChat(user) {
         onclick: async () => {
           error.textContent = '';
           try {
-            await api.updateAiSettings({ apiKey: input.value.trim() });
+            await api.updateAiSettings({ provider: 'claude', apiKey: input.value.trim() });
             deviceKey.clear();
-            useMode('server');
+            useMode('claude');
           } catch (err) {
             error.textContent = err.message;
           }
@@ -102,7 +103,7 @@ export function createChat(user) {
       }, 'Store it on the server for everyone instead')
       : null;
     const setup = h('form.chat-setup', {},
-      h('p', {}, 'Add a Claude API key to start. It is saved on this device and Claude is called from here, so your HomeyVibe server (even a Raspberry Pi) does no AI work.'),
+      h('p', {}, 'Add a Claude API key for this browser. Admins can also enable OpenAI or Claude in Set up with AI → Shared assistant.'),
       field('Claude API key', input),
       h('p.muted', {}, h('a', { href: 'https://platform.claude.com/settings/keys', target: '_blank', rel: 'noopener' }, 'Get a key from the Claude Console')),
       error,
