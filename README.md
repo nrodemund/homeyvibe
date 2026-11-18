@@ -27,7 +27,8 @@ HomeyVibe finds your devices by itself, lets an AI set up pages and automations 
 - 3D floor plans with configurable rooms, sensor displays, light effects, and one-click device presets
 - Users and roles, plus limits such as "radiator only between 18 and 22 °C"
 - Manual page, scene and automation editors, with AI configuration via MCP, the built-in assistant, or a context file
-- Planned: room scanning in the PWA to create the floor plan, an end-to-end encrypted cloud gateway, an Electron desktop app
+- Optional remote access through an [outbound Docker relay](docs/relay.md), with HTTPS from your phone to the Pi
+- Planned: room scanning in the PWA to create the floor plan and an Electron desktop app
 
 ## Run it on a Raspberry Pi
 

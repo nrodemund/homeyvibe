@@ -1,0 +1,35 @@
+name: homeyvibe-relay
+
+services:
+  relay:
+    image: ghcr.io/fatedier/frps:v0.71.1
+    command: ["-c", "/etc/frp/frps.toml"]
+    restart: unless-stopped
+    ports:
+      - "443:8443/tcp"
+      - "7000:7000/tcp"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    secrets:
+      - source: tunnel-token
+        target: /run/relay/token
+      - source: control-cert
+        target: /run/relay/control.crt
+      - source: control-key
+        target: /run/relay/control.key
+    volumes:
+      - type: bind
+        source: ./frps.toml
+        target: /etc/frp/frps.toml
+        read_only: true
+        bind:
+          create_host_path: false
+
+secrets:
+  tunnel-token:
+    file: ./cloud-credentials/token
+  control-cert:
+    file: ./cloud-credentials/control.crt
+  control-key:
+    file: ./cloud-credentials/control.key

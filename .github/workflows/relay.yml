@@ -1,0 +1,20 @@
+name: Remote relay
+
+on:
+  pull_request:
+    paths:
+      - docker/relay/**
+      - docker-compose.yml
+      - .github/workflows/relay.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tunnel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - run: sh docker/relay/test-relay.sh

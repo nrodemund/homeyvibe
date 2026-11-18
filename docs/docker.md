@@ -62,6 +62,7 @@ You can also set `MQTT_URL`, `MQTT_USERNAME`, `MQTT_PASSWORD` and `Z2M_BASE_TOPI
 | `UPDATE_INTERVAL` | `3600` | Seconds between update checks |
 | `ZIGBEE_ADAPTER` | `/dev/ttyUSB0` | Zigbee adapter, `zigbee` profile only |
 | `TZ` | `Etc/UTC` | Time zone, used for scheduled actions |
+| `HOMEYVIBE_PUBLIC_HOST` | | HTTPS hostname for the optional relay. Set it to a hostname such as `home.example.com`. |
 
 After changing `.env`, run `docker compose up -d` again.
 
@@ -89,7 +90,7 @@ docker run --rm -v homeyvibe_homeyvibe-data:/data -v "$PWD":/backup alpine \
 
 ## Remote access and HTTPS
 
-HomeyVibe is meant to stay on your home network. Do not forward port 80 on your router. Until the end-to-end encrypted gateway lands, use a VPN such as WireGuard or Tailscale to reach it from outside. If you put it behind your own reverse proxy with HTTPS, forward the `Host` header unchanged (or set `X-Forwarded-Host`), since the server checks that requests come from the same origin.
+Use the optional [outbound Docker relay](relay.md) to give the PWA a public HTTPS address. Your Pi connects to the relay, and the browser finishes its HTTPS connection directly with the Pi. If you put HomeyVibe behind your own HTTPS reverse proxy, preserve the original `Host` or set `X-Forwarded-Host` for HomeyVibe's same-origin check.
 
 ## Build the images yourself
 

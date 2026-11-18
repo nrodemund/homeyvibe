@@ -1,0 +1,28 @@
+{
+	admin localhost:2019
+	auto_https off
+	servers {
+		protocols h1 h2
+	}
+}
+
+https://{$HOMEYVIBE_PUBLIC_HOST}:8443 {
+	tls /run/homeyvibe-tls/fullchain.pem /run/homeyvibe-tls/privkey.pem
+
+	@setup path /api/auth/setup /api/auth/setup/
+	handle @setup {
+		respond "Create the first HomeyVibe admin on your home network." 403
+	}
+
+	# Connect to the API directly so it receives the original HTTPS origin and scheme.
+	@backend path /api /api/* /mcp /mcp/*
+	handle @backend {
+		reverse_proxy server:8080 {
+			flush_interval -1
+		}
+	}
+
+	handle {
+		reverse_proxy web:80
+	}
+}
