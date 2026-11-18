@@ -1,0 +1,106 @@
+# HomeyVibe on a Raspberry Pi (or any Docker host).
+#
+#   curl -fsSLO https://raw.githubusercontent.com/nrodemund/homeyvibe/main/docker-compose.yml
+#   docker compose up -d                      # HomeyVibe only, using your existing MQTT broker
+#   docker compose --profile zigbee up -d     # also run Mosquitto and zigbee2mqtt
+#
+# Settings go in a `.env` file next to this file (see docs/docker.md). Images are rebuilt from
+# the git main branch on every push and the `updater` service pulls them automatically.
+name: homeyvibe
+
+services:
+  server:
+    image: ghcr.io/nrodemund/homeyvibe:${HOMEYVIBE_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      MQTT_URL: ${MQTT_URL-mqtt://mosquitto:1883}
+      MQTT_USERNAME: ${MQTT_USERNAME:-}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:-}
+      Z2M_BASE_TOPIC: ${Z2M_BASE_TOPIC:-zigbee2mqtt}
+      HOMEYVIBE_DEMO: ${HOMEYVIBE_DEMO:-0}
+      TZ: ${TZ:-Etc/UTC}
+    volumes:
+      - homeyvibe-data:/data
+
+  web:
+    image: ghcr.io/nrodemund/homeyvibe-web:${HOMEYVIBE_TAG:-latest}
+    restart: unless-stopped
+    depends_on: [server]
+    ports:
+      - "${HOMEYVIBE_PORT:-80}:80"
+
+  # Pulls new images every UPDATE_INTERVAL seconds and restarts what changed.
+  # Remove this service (or run with UPDATE_INTERVAL very large) to update by hand instead.
+  updater:
+    image: docker:27-cli
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/update.sh"]
+    working_dir: /project
+    environment:
+      UPDATE_INTERVAL: ${UPDATE_INTERVAL:-3600}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./:/project:ro
+    configs:
+      - source: update-script
+        target: /update.sh
+
+  # Optional: `--profile zigbee` runs an MQTT broker and zigbee2mqtt next to HomeyVibe.
+  mosquitto:
+    profiles: [zigbee]
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    # Not published by default. Uncomment to let other devices on your network use this broker.
+    # ports:
+    #   - "1883:1883"
+    configs:
+      - source: mosquitto-conf
+        target: /mosquitto/config/mosquitto.conf
+    volumes:
+      - mosquitto-data:/mosquitto/data
+
+  zigbee2mqtt:
+    profiles: [zigbee]
+    image: koenkk/zigbee2mqtt:2
+    restart: unless-stopped
+    depends_on: [mosquitto]
+    ports:
+      - "8081:8080"
+    environment:
+      TZ: ${TZ:-Etc/UTC}
+      ZIGBEE2MQTT_CONFIG_MQTT_SERVER: mqtt://mosquitto:1883
+      ZIGBEE2MQTT_CONFIG_SERIAL_PORT: /dev/zigbee
+      ZIGBEE2MQTT_CONFIG_AVAILABILITY_ENABLED: "true"
+      ZIGBEE2MQTT_CONFIG_FRONTEND_ENABLED: "true"
+    devices:
+      - ${ZIGBEE_ADAPTER:-/dev/ttyUSB0}:/dev/zigbee
+    volumes:
+      - zigbee2mqtt-data:/app/data
+
+volumes:
+  homeyvibe-data:
+  mosquitto-data:
+  zigbee2mqtt-data:
+
+configs:
+  # Pulls images built from the git main branch and recreates only containers whose image changed.
+  # Data lives in named volumes and is kept across updates.
+  update-script:
+    content: |
+      #!/bin/sh
+      echo "HomeyVibe updater: checking server and web every $${UPDATE_INTERVAL}s"
+      while true; do
+        if docker compose pull --quiet server web; then
+          docker compose up -d --no-deps server web
+          docker image prune -f > /dev/null 2>&1
+        else
+          echo "HomeyVibe updater: pull failed, retrying next round"
+        fi
+        sleep "$${UPDATE_INTERVAL}"
+      done
+  mosquitto-conf:
+    content: |
+      persistence true
+      persistence_location /mosquitto/data/
+      listener 1883
+      allow_anonymous true
