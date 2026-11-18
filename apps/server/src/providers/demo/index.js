@@ -122,6 +122,7 @@ export function seedDemoConfig({ pages, actions, floorplan = null }) {
       ],
       devices: [
         { deviceId: 'demo:living_room_lamp', roomId: 'living-room', position: [1, 1.6, 3.3] },
+        { deviceId: 'demo:living_room_radiator', roomId: 'living-room', position: [4.8, 0.5, 2] },
         { deviceId: 'demo:hallway_switch', roomId: 'hallway', position: [5.2, 1.2, 3.6] },
         { deviceId: 'demo:bathroom_sensor', roomId: 'bathroom', position: [9.6, 1.8, 0.5] },
         { deviceId: 'demo:bedroom_blind', roomId: 'bedroom', position: [9.85, 1.5, 4.2] },

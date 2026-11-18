@@ -3,6 +3,7 @@ import { PERMISSIONS, ROLES, can } from '../auth/roles.js';
 import { buildContext } from '../ai/context.js';
 import { importConfig } from '../ai/importer.js';
 import { handleMcpRequest } from '../ai/mcp.js';
+import { scopedRegistry } from '../auth/access.js';
 
 const MAX_BODY = 64 * 1024;
 const COOKIE = 'hv_session';
@@ -33,7 +34,10 @@ const COOKIE_MAX_AGE_S = 30 * 24 * 60 * 60;
  *   POST /api/pages, PATCH|DELETE /api/pages/:id         config:write
  *   GET  /api/actions, /api/actions/:id       devices:read
  *   POST /api/actions, PATCH|DELETE /api/actions/:id     config:write
- *   POST /api/actions/:id/run                 devices:control
+ *   POST /api/actions/:id/run                 devices:control (checked against the person's limits)
+ *   GET  /api/access                          users:manage: { ai, users } device limits (see auth/access.js)
+ *   PUT  /api/access/ai                       users:manage: { canControl, canConfigure, default, devices }
+ *   PUT  /api/access/users/:id                users:manage: { default, devices } for a non-admin
  *   GET|POST /api/auth/tokens, DELETE /api/auth/tokens/:id   own access tokens
  *   GET  /api/ai/context                      devices:read (Markdown for any LLM)
  *   GET  /api/floorplan                       devices:read: { rooms, devices } (see config/floorplan.js)
@@ -45,7 +49,11 @@ const COOKIE_MAX_AGE_S = 30 * 24 * 60 * 60;
  *   POST /api/ai/chat                         devices:read: { message, conversationId? } -> SSE
  *   DELETE /api/ai/chat/:id                   forget a conversation
  */
-export function createApiHandler({ registry, auth, pages, actions, engine, aiSettings, chat, floorplan = null }) {
+export function createApiHandler({ registry, auth, pages, actions, engine, aiSettings, chat, floorplan = null, access = null }) {
+  /** The registry as this person may see and use it. */
+  const devicesFor = (user) => (access ? scopedRegistry(registry, access.policyFor(user)) : registry);
+  /** The registry as the AI sees it when acting for this person. */
+  const devicesForAi = (user) => (access ? scopedRegistry(registry, access.aiFor(user).policy) : registry);
   const routes = [
     ['GET', '/api/health', { public: true }, () => ({ ok: true, name: 'homeyvibe' })],
 
@@ -72,36 +80,40 @@ export function createApiHandler({ registry, auth, pages, actions, engine, aiSet
     ['GET', '/api/roles', {}, () =>
       Object.entries(ROLES).map(([id, r]) => ({ id, label: r.label, description: r.description, permissions: r.permissions }))],
 
-    ['GET', '/api/devices', { permission: PERMISSIONS.DEVICES_READ }, () => registry.list()],
-    ['GET', '/api/devices/:id', { permission: PERMISSIONS.DEVICES_READ }, ({ params }) => {
-      const device = registry.get(params.id);
+    ['GET', '/api/devices', { permission: PERMISSIONS.DEVICES_READ }, ({ user }) => devicesFor(user).list()],
+    ['GET', '/api/devices/:id', { permission: PERMISSIONS.DEVICES_READ }, ({ params, user }) => {
+      const device = devicesFor(user).get(params.id);
       if (!device) throw new HttpError(404, 'Unknown device');
       return device;
     }],
-    ['POST', '/api/devices/:id/set', { permission: PERMISSIONS.DEVICES_CONTROL, status: 202 }, ({ params, body }) =>
-      registry.command(params.id, body)],
-    ['GET', '/api/events', { permission: PERMISSIONS.DEVICES_READ, raw: true }, ({ req, res }) =>
-      streamEvents(req, res, { registry, pages, actions, engine, floorplan })],
+    ['POST', '/api/devices/:id/set', { permission: PERMISSIONS.DEVICES_CONTROL, status: 202 }, ({ params, body, user }) =>
+      devicesFor(user).command(params.id, body)],
+    ['GET', '/api/events', { permission: PERMISSIONS.DEVICES_READ, raw: true }, ({ req, res, user }) =>
+      streamEvents(req, res, { registry, pages, actions, engine, floorplan, access, user })],
 
     ...(floorplan ? [
-      ['GET', '/api/floorplan', { permission: PERMISSIONS.DEVICES_READ }, () => floorplan.get()],
+      ['GET', '/api/floorplan', { permission: PERMISSIONS.DEVICES_READ }, ({ user }) => {
+        const plan = floorplan.get();
+        const policy = access?.policyFor(user);
+        return policy ? { ...plan, devices: plan.devices.filter((d) => policy.canSee(d.deviceId)) } : plan;
+      }],
       ['PUT', '/api/floorplan', { permission: PERMISSIONS.CONFIG_WRITE }, ({ body }) => floorplan.replace(body)],
     ] : []),
     ...(pages ? crudRoutes('pages', pages, 'page') : []),
     ...(actions ? crudRoutes('actions', actions, 'action') : []),
     ...(pages && actions ? [
-      ['GET', '/api/ai/context', { permission: PERMISSIONS.DEVICES_READ, raw: true }, ({ res }) => {
+      ['GET', '/api/ai/context', { permission: PERMISSIONS.DEVICES_READ, raw: true }, ({ res, user }) => {
         res.writeHead(200, {
           'content-type': 'text/markdown; charset=utf-8',
           'content-disposition': 'attachment; filename="homeyvibe-context.md"',
           'cache-control': 'no-store',
         });
-        res.end(buildContext({ registry, pages, actions, floorplan }));
+        res.end(buildContext({ registry: devicesForAi(user), pages, actions, floorplan }));
       }],
-      ['POST', '/api/ai/import', { permission: PERMISSIONS.CONFIG_WRITE }, ({ body }) =>
-        importConfig({ bundle: body, pages, actions, registry, floorplan })],
+      ['POST', '/api/ai/import', { permission: PERMISSIONS.CONFIG_WRITE }, ({ body, user }) =>
+        importConfig({ bundle: body, pages, actions, registry: devicesFor(user), floorplan })],
       ['POST', '/mcp', { permission: PERMISSIONS.DEVICES_READ, raw: true }, ({ req, res, body, user }) =>
-        handleMcpRequest({ req, res, body, user, deps: { registry, pages, actions, engine, floorplan } })],
+        handleMcpRequest({ req, res, body, user, deps: { registry, pages, actions, engine, floorplan, access } })],
     ] : []),
     ...(aiSettings ? [
       ['GET', '/api/ai/settings', {}, () => aiSettings.status()],
@@ -116,8 +128,21 @@ export function createApiHandler({ registry, auth, pages, actions, engine, aiSet
         return { ok: true };
       }],
     ] : []),
-    ...(engine ? [['POST', '/api/actions/:id/run', { permission: PERMISSIONS.DEVICES_CONTROL }, ({ params, user }) =>
-      engine.run(params.id, { by: `user:${user.username}` })]] : []),
+    ...(engine ? [['POST', '/api/actions/:id/run', { permission: PERMISSIONS.DEVICES_CONTROL }, ({ params, user }) => {
+      const scoped = devicesFor(user);
+      if (scoped.check) engine.preflight(params.id, scoped.check);
+      return engine.run(params.id, { by: `user:${user.username}` });
+    }]] : []),
+    ...(access ? [
+      ['GET', '/api/access', { permission: PERMISSIONS.USERS_MANAGE }, () => access.all()],
+      ['PUT', '/api/access/ai', { permission: PERMISSIONS.USERS_MANAGE }, ({ body }) => access.setAi(body)],
+      ['PUT', '/api/access/users/:id', { permission: PERMISSIONS.USERS_MANAGE }, ({ params, body }) => {
+        const target = auth.getUser(params.id);
+        if (!target) throw new HttpError(404, 'Unknown user');
+        if (target.role === 'admin') throw new HttpError(400, 'Admins always have full access');
+        return access.setUser(params.id, body);
+      }],
+    ] : []),
 
     ['GET', '/api/users', { permission: PERMISSIONS.USERS_MANAGE }, () => auth.listUsers()],
     ['POST', '/api/users', { permission: PERMISSIONS.USERS_MANAGE, status: 201 }, ({ body }) => auth.createUser(body)],
@@ -132,6 +157,7 @@ export function createApiHandler({ registry, auth, pages, actions, engine, aiSet
     ['DELETE', '/api/users/:id', { permission: PERMISSIONS.USERS_MANAGE }, ({ user, params }) => {
       if (params.id === user.id) throw new HttpError(409, 'You cannot delete yourself');
       auth.deleteUser(params.id);
+      access?.removeUser(params.id);
       return { ok: true };
     }],
   ].map(([method, path, opts, handler]) => ({ method, ...compile(path), opts, handler }));
@@ -279,18 +305,31 @@ async function streamChat({ req, res, body, user, chat }) {
 
 const HEARTBEAT_MS = 25_000;
 
-function streamEvents(req, res, { registry, pages, actions, engine, floorplan }) {
+function streamEvents(req, res, { registry, pages, actions, engine, floorplan, access, user }) {
+  let policy = access?.policyFor(user) ?? null;
+  const visible = (device) => (policy ? policy.decorate(device) : device);
   res.writeHead(200, {
     'content-type': 'text/event-stream',
     'cache-control': 'no-cache',
     connection: 'keep-alive',
   });
   const emit = (event, data) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
-  emit('snapshot', registry.list());
+  const snapshot = () => emit('snapshot', registry.list().map(visible).filter(Boolean));
+  snapshot();
 
-  const onDevice = (device) => emit('device', device);
+  const onDevice = (device) => {
+    const shown = visible(device);
+    if (shown) emit('device', shown);
+  };
   const onRemoved = (device) => emit('removed', { id: device.id });
-  const onState = (device, changes) => emit('state', { id: device.id, changes });
+  const onState = (device, changes) => {
+    if (!policy || policy.canSee(device.id)) emit('state', { id: device.id, changes });
+  };
+  const onAccess = () => {
+    policy = access.policyFor(user);
+    snapshot();
+  };
+  access?.on('changed', onAccess);
   registry.on('device:added', onDevice);
   registry.on('device:updated', onDevice);
   registry.on('device:removed', onRemoved);
@@ -315,6 +354,7 @@ function streamEvents(req, res, { registry, pages, actions, engine, floorplan })
     actions?.off('changed', onActions);
     engine?.off('run', onRun);
     floorplan?.off('changed', onFloorplan);
+    access?.off('changed', onAccess);
   });
 }
 

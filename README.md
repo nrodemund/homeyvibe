@@ -9,7 +9,7 @@ A smart home platform whose core idea is **being easy**: everything is auto-dete
 - **Control by UI or AI.** Every device and action is reachable both ways.
 - **Multiple page designs**, including 3D views of your floor plan built with three.js.
 - **Room scanning** in the PWA to create a floor layout.
-- **Users and roles.**
+- **Users and roles**, with per-device limits and value ranges for people and for the AI's own user.
 - **Gateways.** A server applet bridges cloud to mobile with end-to-end encryption.
 - **Runs everywhere.** Web, PWA, and Electron desktop.
 

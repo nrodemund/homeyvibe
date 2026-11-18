@@ -304,7 +304,7 @@ export function renderDashboard(root, user, onSignedOut) {
     `;
     card.querySelector('h3').textContent = device.name;
     card.querySelector('.meta').textContent =
-      [device.vendor, device.model].filter(Boolean).join(' · ') + (device.available === false ? ' · offline' : '');
+      [device.vendor, device.model, device.access === 'view' ? 'view only' : null].filter(Boolean).join(' · ') + (device.available === false ? ' · offline' : '');
 
     const caps = card.querySelector('.caps');
     for (const cap of primary) caps.append(renderCap(device, cap));
@@ -323,6 +323,7 @@ export function renderDashboard(root, user, onSignedOut) {
     row.append(label);
     const value = device.state[cap.property];
     const inputId = `c${++controlSeq}`;
+    const range = device.ranges?.[cap.property]; // this person's allowed values
     label.htmlFor = inputId;
 
     switch (kind) {
@@ -343,8 +344,9 @@ export function renderDashboard(root, user, onSignedOut) {
         const input = document.createElement('input');
         input.type = 'range';
         input.id = inputId;
-        input.min = cap.min;
-        input.max = cap.max;
+        input.min = range?.[0] ?? cap.min;
+        input.max = range?.[1] ?? cap.max;
+        if (range) label.append(h('span.range-hint', {}, `${range[0]}–${formatValue(cap, range[1])}`));
         input.step = cap.step ?? 1;
         input.value = value ?? cap.min;
         const out = document.createElement('output');
@@ -390,7 +392,7 @@ export function renderDashboard(root, user, onSignedOut) {
         row.append(out);
       }
     }
-    if (!canControl) for (const el of row.querySelectorAll('input, select, button')) el.disabled = true;
+    if (!canControl || device.access === 'view') for (const el of row.querySelectorAll('input, select, button')) el.disabled = true;
     return row;
   }
 

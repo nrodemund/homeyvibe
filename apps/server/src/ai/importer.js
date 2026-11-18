@@ -69,7 +69,19 @@ export function importConfig({ bundle, pages, actions, registry, floorplan = nul
   };
   normalizedActions.forEach((a, i) => {
     a.steps.forEach((s, j) => {
-      if (s.type === 'set') checkDevice(`actions[${i}].steps[${j}]`, s.deviceId, Object.keys(s.values), s.values);
+      if (s.type === 'set') {
+        const path = `actions[${i}].steps[${j}]`;
+        const before = errors.length;
+        checkDevice(path, s.deviceId, Object.keys(s.values), s.values);
+        // A limited importer (the AI) may not write actions that go beyond its own limits.
+        if (registry.check && errors.length === before) {
+          try {
+            registry.check(s.deviceId, s.values);
+          } catch (err) {
+            errors.push(`${path}: ${err.message}`);
+          }
+        }
+      }
       if (s.type === 'run' && !actionIds.has(s.actionId)) errors.push(`actions[${i}].steps[${j}]: unknown action ${s.actionId}`);
     });
     a.triggers.forEach((t, j) => {
@@ -106,6 +118,13 @@ export function importConfig({ bundle, pages, actions, registry, floorplan = nul
     }
   }
   if (plan) {
+    // Placements of devices the importer cannot see are kept as they are.
+    const roomIds = new Set(plan.rooms.map((r) => r.id));
+    for (const d of floorplan.get().devices) {
+      if (registry.policy && !registry.policy.canSee(d.deviceId) && !plan.devices.some((p) => p.deviceId === d.deviceId)) {
+        plan.devices.push({ ...d, roomId: roomIds.has(d.roomId) ? d.roomId : null });
+      }
+    }
     floorplan.replace(plan);
     result.floorplan = { rooms: plan.rooms.length, devices: plan.devices.length };
   }

@@ -65,3 +65,19 @@ test('deviceSummary and lightLevel describe state for 3D labels', () => {
   assert.equal(lightLevel({ ...lamp, state: { state: 'OFF' } }), 0);
   assert.equal(lightLevel(sensor), null);
 });
+
+test('limits helpers: ranges, entries and summaries', async () => {
+  const { entryFor, limitableCaps, parseRange, summarize } = await import('../src/limits.js');
+  const setpoint = { property: 'occupied_heating_setpoint', type: 'numeric', writable: true, min: 5, max: 35, label: 'Target temperature' };
+  assert.deepEqual(parseRange(setpoint, '18', '22'), [18, 22]);
+  assert.deepEqual(parseRange(setpoint, '', '22'), [5, 22]);
+  assert.equal(parseRange(setpoint, '', ''), null);
+  assert.throws(() => parseRange(setpoint, '23', '22'), /above the highest/);
+  assert.throws(() => parseRange(setpoint, '2', '22'), /stay within 5–35/);
+  assert.deepEqual(limitableCaps({ capabilities: [setpoint, { ...setpoint, property: 'x', writable: false }, { ...setpoint, property: 'b', category: 'diagnostic' }] }).map((c) => c.property), ['occupied_heating_setpoint']);
+  const limits = { default: 'view', devices: { r: { access: 'control', ranges: { t: [18, 22] } }, s: { access: 'hidden' } } };
+  assert.deepEqual(entryFor(limits, 'r'), { access: 'control', ranges: { t: [18, 22] } });
+  assert.deepEqual(entryFor(limits, 'new'), { access: 'view', ranges: {} });
+  assert.equal(summarize(limits), 'new devices view only · 1 hidden · 1 value range');
+  assert.equal(summarize({ default: 'control', devices: {} }), 'No limits');
+});
