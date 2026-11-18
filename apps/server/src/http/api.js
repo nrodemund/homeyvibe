@@ -1,5 +1,8 @@
 import { HttpError } from './errors.js';
 import { PERMISSIONS, ROLES, can } from '../auth/roles.js';
+import { buildContext } from '../ai/context.js';
+import { importConfig } from '../ai/importer.js';
+import { handleMcpRequest } from '../ai/mcp.js';
 
 const MAX_BODY = 64 * 1024;
 const COOKIE = 'hv_session';
@@ -31,6 +34,10 @@ const COOKIE_MAX_AGE_S = 30 * 24 * 60 * 60;
  *   GET  /api/actions, /api/actions/:id       devices:read
  *   POST /api/actions, PATCH|DELETE /api/actions/:id     config:write
  *   POST /api/actions/:id/run                 devices:control
+ *   GET|POST /api/auth/tokens, DELETE /api/auth/tokens/:id   own access tokens
+ *   GET  /api/ai/context                      devices:read (Markdown for any LLM)
+ *   POST /api/ai/import                       config:write ({ pages, actions } from an LLM)
+ *   POST /mcp                                 MCP (Streamable HTTP, stateless), Bearer token
  */
 export function createApiHandler({ registry, auth, pages, actions, engine }) {
   const routes = [
@@ -49,6 +56,12 @@ export function createApiHandler({ registry, auth, pages, actions, engine }) {
       return { ok: true };
     }],
     ['GET', '/api/auth/me', {}, ({ user }) => user],
+    ['GET', '/api/auth/tokens', {}, ({ user }) => auth.listAccessTokens(user.id)],
+    ['POST', '/api/auth/tokens', { status: 201 }, ({ user, body }) => auth.createAccessToken(user.id, body.name)],
+    ['DELETE', '/api/auth/tokens/:id', {}, ({ user, params }) => {
+      auth.revokeAccessToken(user.id, params.id);
+      return { ok: true };
+    }],
 
     ['GET', '/api/roles', {}, () =>
       Object.entries(ROLES).map(([id, r]) => ({ id, label: r.label, description: r.description, permissions: r.permissions }))],
@@ -66,6 +79,20 @@ export function createApiHandler({ registry, auth, pages, actions, engine }) {
 
     ...(pages ? crudRoutes('pages', pages, 'page') : []),
     ...(actions ? crudRoutes('actions', actions, 'action') : []),
+    ...(pages && actions ? [
+      ['GET', '/api/ai/context', { permission: PERMISSIONS.DEVICES_READ, raw: true }, ({ res }) => {
+        res.writeHead(200, {
+          'content-type': 'text/markdown; charset=utf-8',
+          'content-disposition': 'attachment; filename="homeyvibe-context.md"',
+          'cache-control': 'no-store',
+        });
+        res.end(buildContext({ registry, pages, actions }));
+      }],
+      ['POST', '/api/ai/import', { permission: PERMISSIONS.CONFIG_WRITE }, ({ body }) =>
+        importConfig({ bundle: body, pages, actions, registry })],
+      ['POST', '/mcp', { permission: PERMISSIONS.DEVICES_READ, raw: true }, ({ req, res, body, user }) =>
+        handleMcpRequest({ req, res, body, user, deps: { registry, pages, actions, engine } })],
+    ] : []),
     ...(engine ? [['POST', '/api/actions/:id/run', { permission: PERMISSIONS.DEVICES_CONTROL }, ({ params, user }) =>
       engine.run(params.id, { by: `user:${user.username}` })]] : []),
 
