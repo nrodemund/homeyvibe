@@ -26,8 +26,13 @@ const COOKIE_MAX_AGE_S = 30 * 24 * 60 * 60;
  *   POST /api/users                           users:manage
  *   PATCH  /api/users/:id                     users:manage, or self for displayName/password
  *   DELETE /api/users/:id                     users:manage
+ *   GET  /api/pages, /api/pages/:id           devices:read
+ *   POST /api/pages, PATCH|DELETE /api/pages/:id         config:write
+ *   GET  /api/actions, /api/actions/:id       devices:read
+ *   POST /api/actions, PATCH|DELETE /api/actions/:id     config:write
+ *   POST /api/actions/:id/run                 devices:control
  */
-export function createApiHandler({ registry, auth }) {
+export function createApiHandler({ registry, auth, pages, actions, engine }) {
   const routes = [
     ['GET', '/api/health', { public: true }, () => ({ ok: true, name: 'homeyvibe' })],
 
@@ -57,7 +62,12 @@ export function createApiHandler({ registry, auth }) {
     ['POST', '/api/devices/:id/set', { permission: PERMISSIONS.DEVICES_CONTROL, status: 202 }, ({ params, body }) =>
       registry.command(params.id, body)],
     ['GET', '/api/events', { permission: PERMISSIONS.DEVICES_READ, raw: true }, ({ req, res }) =>
-      streamEvents(req, res, registry)],
+      streamEvents(req, res, { registry, pages, actions, engine })],
+
+    ...(pages ? crudRoutes('pages', pages, 'page') : []),
+    ...(actions ? crudRoutes('actions', actions, 'action') : []),
+    ...(engine ? [['POST', '/api/actions/:id/run', { permission: PERMISSIONS.DEVICES_CONTROL }, ({ params, user }) =>
+      engine.run(params.id, { by: `user:${user.username}` })]] : []),
 
     ['GET', '/api/users', { permission: PERMISSIONS.USERS_MANAGE }, () => auth.listUsers()],
     ['POST', '/api/users', { permission: PERMISSIONS.USERS_MANAGE, status: 201 }, ({ body }) => auth.createUser(body)],
@@ -106,6 +116,25 @@ export function createApiHandler({ registry, auth }) {
 }
 
 // ---- routing -------------------------------------------------------------------
+
+/** Standard list/get/create/update/delete routes for a config collection. */
+function crudRoutes(name, collection, noun) {
+  const get = ({ params }) => {
+    const item = collection.get(params.id);
+    if (!item) throw new HttpError(404, `Unknown ${noun}`);
+    return item;
+  };
+  return [
+    ['GET', `/api/${name}`, { permission: PERMISSIONS.DEVICES_READ }, () => collection.list()],
+    ['GET', `/api/${name}/:id`, { permission: PERMISSIONS.DEVICES_READ }, get],
+    ['POST', `/api/${name}`, { permission: PERMISSIONS.CONFIG_WRITE, status: 201 }, ({ body }) => collection.create(body)],
+    ['PATCH', `/api/${name}/:id`, { permission: PERMISSIONS.CONFIG_WRITE }, ({ params, body }) => collection.update(params.id, body)],
+    ['DELETE', `/api/${name}/:id`, { permission: PERMISSIONS.CONFIG_WRITE }, ({ params }) => {
+      collection.delete(params.id);
+      return { ok: true };
+    }],
+  ];
+}
 
 function compile(path) {
   const keys = [];
@@ -178,7 +207,7 @@ function pick(obj, keys) {
 
 const HEARTBEAT_MS = 25_000;
 
-function streamEvents(req, res, registry) {
+function streamEvents(req, res, { registry, pages, actions, engine }) {
   res.writeHead(200, {
     'content-type': 'text/event-stream',
     'cache-control': 'no-cache',
@@ -194,6 +223,12 @@ function streamEvents(req, res, registry) {
   registry.on('device:updated', onDevice);
   registry.on('device:removed', onRemoved);
   registry.on('state', onState);
+  const onPages = () => emit('pages', pages.list());
+  const onActions = () => emit('actions', actions.list());
+  const onRun = (result) => emit('run', result);
+  pages?.on('changed', onPages);
+  actions?.on('changed', onActions);
+  engine?.on('run', onRun);
   const heartbeat = setInterval(() => res.write(': ping\n\n'), HEARTBEAT_MS);
 
   res.on('close', () => {
@@ -202,6 +237,9 @@ function streamEvents(req, res, registry) {
     registry.off('device:updated', onDevice);
     registry.off('device:removed', onRemoved);
     registry.off('state', onState);
+    pages?.off('changed', onPages);
+    actions?.off('changed', onActions);
+    engine?.off('run', onRun);
   });
 }
 

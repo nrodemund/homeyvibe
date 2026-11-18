@@ -30,5 +30,8 @@ export const api = {
   createUser: (input) => request('/api/users', { method: 'POST', body: input }),
   updateUser: (id, changes) => request(`/api/users/${encodeURIComponent(id)}`, { method: 'PATCH', body: changes }),
   deleteUser: (id) => request(`/api/users/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  pages: () => request('/api/pages'),
+  actions: () => request('/api/actions'),
+  runAction: (id) => request(`/api/actions/${encodeURIComponent(id)}/run`, { method: 'POST' }),
   setDevice: (id, values) => request(`/api/devices/${encodeURIComponent(id)}/set`, { method: 'POST', body: values }),
 };

@@ -45,6 +45,29 @@ Passwords are hashed with scrypt. Sessions are random tokens (only their SHA-256
 
 Behind a reverse proxy, keep the `Host` header (or set `X-Forwarded-Host`) and `X-Forwarded-Proto: https` so cookies get the `Secure` flag.
 
+## Pages and actions
+
+**Pages** are dashboard tabs. Each has a title, optional icon, a layout (`grid`, `list`, or `3d` for later) and sections. A section holds items: a device (optionally limited to some `properties`) or an action button.
+
+```json
+{ "title": "Living room", "icon": "🛋️", "sections": [
+  { "title": "Scenes", "items": [{ "type": "action", "actionId": "movie-night" }] },
+  { "title": "Lights", "items": [{ "type": "device", "deviceId": "z2m:0x…", "properties": ["state", "brightness"] }] }
+] }
+```
+
+**Actions** are named lists of steps, run from a button, by the AI, or by triggers:
+
+- steps: `set` (`deviceId`, `values`), `delay` (`seconds`), `run` (another `actionId`, up to 5 levels deep)
+- triggers: `state` (`deviceId`, `property`, `op` of `eq|ne|gt|lt|gte|lte|changed`, `value`) and `time` (`at: "07:30"`, optional `days: ["mon", …]`, server local time)
+
+```json
+{ "name": "Fan when humid", "steps": [{ "type": "set", "deviceId": "z2m:0x…", "values": { "state": "ON" } }],
+  "triggers": [{ "type": "state", "deviceId": "z2m:0x…", "property": "humidity", "op": "gt", "value": 70 }] }
+```
+
+Ids are generated from the title or name (`living-room`) unless given. Validation returns every problem in one 400 response, which helps AI clients fix everything in one go. A triggered action won't re-trigger within 2 seconds, so it can't loop on its own state changes.
+
 ## API
 
 Everything except health and sign-in needs a session.
@@ -59,9 +82,12 @@ Everything except health and sign-in needs a session.
 | GET | `/api/auth/me` | signed in |
 | GET | `/api/roles` | signed in |
 | GET | `/api/devices`, `/api/devices/:id` | guest and up |
-| GET | `/api/events` | guest and up: Server-Sent Events, `snapshot` on connect, then `device`, `removed`, `state` (`{ id, changes }`) |
+| GET | `/api/events` | guest and up: Server-Sent Events, `snapshot` on connect, then `device`, `removed`, `state` (`{ id, changes }`), `pages`, `actions`, `run` |
 | POST | `/api/devices/:id/set` | member and up: `{ "brightness": 120, "state": "ON" }`, validated against capabilities, returns 202 |
 | GET, POST | `/api/users` | admin |
 | PATCH | `/api/users/:id` | admin, or yourself for `displayName` / `password` |
 | DELETE | `/api/users/:id` | admin (not yourself, never the last admin) |
+| GET | `/api/pages`, `/api/pages/:id`, `/api/actions`, `/api/actions/:id` | guest and up |
+| POST, PATCH, DELETE | `/api/pages[/:id]`, `/api/actions[/:id]` | admin (`config:write`) |
+| POST | `/api/actions/:id/run` | member and up, returns `{ ok, error?, by, startedAt, finishedAt }` |
 

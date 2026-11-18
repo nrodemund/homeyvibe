@@ -73,3 +73,43 @@ export function createDemoProvider({ registry, tickMs = 5000 }) {
   provider.stop = () => clearInterval(timer);
   return provider;
 }
+
+/** Example pages and actions for demo mode, only added when none exist yet. */
+export function seedDemoConfig({ pages, actions }) {
+  if (actions.list().length === 0) {
+    actions.create({
+      id: 'movie-night',
+      name: 'Movie night',
+      description: 'Dim the lamp and close the blind',
+      steps: [
+        { type: 'set', deviceId: 'demo:living_room_lamp', values: { state: 'ON', brightness: 40, color_temp: 450 } },
+        { type: 'set', deviceId: 'demo:bedroom_blind', values: { position: 0 } },
+      ],
+    });
+    actions.create({
+      id: 'all-lights-off',
+      name: 'All lights off',
+      steps: [
+        { type: 'set', deviceId: 'demo:living_room_lamp', values: { state: 'OFF' } },
+        { type: 'set', deviceId: 'demo:hallway_switch', values: { state_left: 'OFF', state_right: 'OFF' } },
+      ],
+    });
+  }
+  if (pages.list().length === 0) {
+    pages.create({
+      id: 'living-room',
+      title: 'Living room',
+      icon: '🛋️',
+      sections: [
+        { title: 'Scenes', items: [{ type: 'action', actionId: 'movie-night' }, { type: 'action', actionId: 'all-lights-off' }] },
+        { title: 'Lights', items: [{ type: 'device', deviceId: 'demo:living_room_lamp', properties: ['state', 'brightness'] }] },
+      ],
+    });
+    pages.create({
+      id: 'climate',
+      title: 'Climate',
+      icon: '🌡️',
+      sections: [{ items: [{ type: 'device', deviceId: 'demo:bathroom_sensor' }, { type: 'device', deviceId: 'demo:bedroom_blind' }] }],
+    });
+  }
+}
