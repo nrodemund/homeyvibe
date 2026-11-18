@@ -94,6 +94,15 @@ Coordinates are meters seen from above (`points` are `[x, z]` corners in order; 
 
 Two ways to let an AI find devices, build pages and create actions. Both are under **Set up with AI** in the web app's user menu.
 
+### Client-side assistant (recommended, e.g. for a Raspberry Pi)
+
+The web app's assistant calls Claude from the browser with a key kept on that device. The server only describes and runs the tools:
+
+- `GET /api/ai/tools` returns `{ model, system, tools }` (JSON Schema inputs) for the signed-in person
+- `POST /api/ai/tools/:name` runs one tool. The body is the tool input and the reply is `{ ok, text }`. It applies the same validation, permissions and limits as MCP.
+
+Any client (the desktop app, a script) can drive its own model the same way.
+
 ### MCP server (Claude, Codex, any MCP client)
 
 `POST /mcp` is a stateless [Model Context Protocol](https://modelcontextprotocol.io) endpoint (Streamable HTTP). Create a personal access token in the web app; the AI acts with that person's role.
@@ -127,9 +136,9 @@ The prompt `set_up_my_home` asks the AI to propose pages and actions and apply t
 
 `GET /api/ai/context` downloads a Markdown file describing every device, the current pages and actions, and the formats. Give it to any AI, then paste its JSON answer into the import box (`POST /api/ai/import`, admins). Imports are checked against real devices, capabilities and value ranges, and nothing is saved unless everything is valid.
 
-### Built-in assistant
+### Server-side assistant (optional)
 
-The chat button in the web app talks to Claude (`claude-opus-5-5` by default) with the same tools as the MCP server, limited by each person's role. An admin adds a Claude API key under **Set up with AI** (stored in the data directory, never sent back to browsers), or set `ANTHROPIC_API_KEY` for the server. Usage is billed to that key.
+When a device has no key of its own, the chat button can use a shared key on the server instead. The server then calls Claude (`claude-opus-5-5` by default) with the same tools as the MCP server, limited by each person's role. An admin adds the key under **Set up with AI** (stored in the data directory and never sent back to browsers), or sets `ANTHROPIC_API_KEY` for the server. Usage is billed to that key.
 
 - `POST /api/ai/chat` with `{ message, conversationId? }` streams Server-Sent Events: `start`, `text` (`delta`), `tool` / `tool_result`, `done`, `error`.
 - Turning things on and off happens straight away. The assistant describes deletions and bulk configuration changes first and waits for a yes.

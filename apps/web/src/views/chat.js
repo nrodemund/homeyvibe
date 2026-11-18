@@ -1,6 +1,7 @@
 import { api, ApiError } from '../api.js';
-import { h, onSubmit } from '../ui.js';
+import { h } from '../ui.js';
 import { field } from './auth.js';
+import { createClientChat, deviceKey } from '../ai/client-chat.js';
 
 const SUGGESTIONS = [
   'Set up pages for my home',
@@ -14,6 +15,9 @@ export function createChat(user) {
   const canConfigure = user.permissions.includes('config:write');
   let conversationId = null;
   let busy = false;
+  let mode = null; // 'device': Claude is called from here; 'server': the HomeyVibe server calls it
+  const local = createClientChat();
+  const modeNote = h('span.chat-mode');
 
   const log = h('div.chat-log', { role: 'log', 'aria-live': 'polite' });
   const input = h('textarea', { name: 'message', rows: 1, placeholder: 'Ask HomeyVibe…', maxLength: 4000, required: true });
@@ -22,7 +26,7 @@ export function createChat(user) {
   const body = h('div.chat-body', {});
   const panel = h('section.chat-panel', { hidden: true, 'aria-label': 'HomeyVibe assistant' },
     h('header', {},
-      h('h2', {}, 'Assistant'),
+      h('div', {}, h('h2', {}, 'Assistant'), modeNote),
       h('div.row', {},
         h('button.icon-button', { type: 'button', onclick: () => newChat() }, 'New chat'),
         h('button.icon-button', { type: 'button', 'aria-label': 'Close', onclick: () => toggle(false) }, '✕'),
@@ -53,9 +57,23 @@ export function createChat(user) {
     panel.hidden = !open;
     fab.hidden = open;
     if (!open) return;
+    if (deviceKey.get()) return useMode('device');
     const status = await api.aiSettings().catch(() => ({ configured: false }));
-    if (status.configured) showChat();
+    if (status.configured) useMode('server');
     else showSetup();
+  }
+
+  function useMode(next) {
+    if (mode !== next) {
+      mode = next;
+      conversationId = null;
+      log.replaceChildren();
+    }
+    modeNote.textContent = mode === 'device' ? 'Runs on this device' : 'Runs on the server';
+    modeNote.title = mode === 'device'
+      ? 'Claude is called from this device with the key saved here; your HomeyVibe server only runs the tools.'
+      : 'Your HomeyVibe server calls Claude with the key saved there.';
+    showChat();
   }
 
   function showChat() {
@@ -64,21 +82,41 @@ export function createChat(user) {
     input.focus();
   }
 
-  function showSetup() {
-    if (!canConfigure) {
-      body.replaceChildren(h('p.chat-note', {}, 'The assistant is not set up yet. Ask an admin to add a Claude API key under Set up with AI.'));
-      return;
-    }
+  function showSetup(message = null) {
+    modeNote.textContent = '';
+    const input = h('input', { name: 'apiKey', type: 'password', placeholder: 'sk-ant-…', required: true, autocomplete: 'off' });
+    const error = h('p.form-error', { role: 'alert' }, message ?? '');
+    const onServer = canConfigure
+      ? h('button.link-button', {
+        type: 'button',
+        onclick: async () => {
+          error.textContent = '';
+          try {
+            await api.updateAiSettings({ apiKey: input.value.trim() });
+            deviceKey.clear();
+            useMode('server');
+          } catch (err) {
+            error.textContent = err.message;
+          }
+        },
+      }, 'Store it on the server for everyone instead')
+      : null;
     const setup = h('form.chat-setup', {},
-      h('p', {}, 'To use the built-in assistant, add a Claude API key. It stays on your HomeyVibe server and is used for everyone in the home.'),
-      field('Claude API key', h('input', { name: 'apiKey', type: 'password', placeholder: 'sk-ant-…', required: true, autocomplete: 'off' })),
+      h('p', {}, 'Add a Claude API key to start. It is saved on this device and Claude is called from here, so your HomeyVibe server (even a Raspberry Pi) does no AI work.'),
+      field('Claude API key', input),
       h('p.muted', {}, h('a', { href: 'https://platform.claude.com/settings/keys', target: '_blank', rel: 'noopener' }, 'Get a key from the Claude Console')),
-      h('p.form-error', { role: 'alert' }),
-      h('button.primary', { type: 'submit' }, 'Save and start'),
+      error,
+      h('button.primary', { type: 'submit' }, 'Save on this device'),
+      onServer,
     );
-    onSubmit(setup, async ({ apiKey }) => {
-      await api.updateAiSettings({ apiKey });
-      showChat();
+    setup.addEventListener('submit', (e) => {
+      e.preventDefault();
+      try {
+        deviceKey.set(input.value);
+        useMode('device');
+      } catch (err) {
+        error.textContent = err.message;
+      }
     });
     body.replaceChildren(setup);
   }
@@ -91,7 +129,8 @@ export function createChat(user) {
   }
 
   function newChat() {
-    if (conversationId) api.forgetChat(conversationId).catch(() => {});
+    if (conversationId && mode === 'device') local.forget(conversationId);
+    else if (conversationId) api.forgetChat(conversationId).catch(() => {});
     conversationId = null;
     log.replaceChildren();
     renderWelcome();
@@ -113,47 +152,58 @@ export function createChat(user) {
     bubble('user', text);
     let reply = bubble('assistant thinking');
     let replyText = '';
-    try {
-      const res = await fetch('/api/ai/chat', {
-        method: 'POST',
-        credentials: 'same-origin',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ message: text, conversationId }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new ApiError(res.status, data.error ?? res.statusText);
-      }
-      for await (const { event, data } of readEvents(res)) {
-        if (event === 'start' || event === 'done') conversationId = data.conversationId;
-        else if (event === 'text') {
-          if (reply.classList.contains('tool')) {
-            reply = bubble('assistant');
-            replyText = '';
-          }
-          reply.classList.remove('thinking');
-          replyText += data.delta;
-          reply.textContent = replyText;
-        } else if (event === 'tool') {
-          if (reply.classList.contains('thinking')) reply.remove();
-          reply = bubble('assistant tool', `${data.title}…`);
-          reply.dataset.tool = data.name;
-        } else if (event === 'tool_result') {
-          const chip = [...log.querySelectorAll(`.msg.tool[data-tool="${CSS.escape(data.name)}"]:not(.finished)`)].at(-1);
-          if (chip) {
-            chip.classList.add('finished', data.ok ? 'ok' : 'failed');
-            chip.textContent = `${chip.textContent.replace(/…$/, '')} ${data.ok ? '✓' : '✕'}`;
-          }
-        } else if (event === 'error') {
-          bubble('error', data.message);
+
+    const handle = (event, data) => {
+      if (event === 'start' || event === 'done') conversationId = data.conversationId;
+      else if (event === 'text') {
+        if (reply.classList.contains('tool')) {
+          reply = bubble('assistant');
+          replyText = '';
         }
-        log.scrollTop = log.scrollHeight;
+        reply.classList.remove('thinking');
+        replyText += data.delta;
+        reply.textContent = replyText;
+      } else if (event === 'tool') {
+        if (reply.classList.contains('thinking')) reply.remove();
+        reply = bubble('assistant tool', `${data.title}…`);
+        reply.dataset.tool = data.name;
+      } else if (event === 'tool_result') {
+        const chip = [...log.querySelectorAll(`.msg.tool[data-tool="${CSS.escape(data.name)}"]:not(.finished)`)].at(-1);
+        if (chip) {
+          chip.classList.add('finished', data.ok ? 'ok' : 'failed');
+          chip.textContent = `${chip.textContent.replace(/…$/, '')} ${data.ok ? '✓' : '✕'}`;
+        }
+      } else if (event === 'error') {
+        bubble('error', data.message);
+      }
+      log.scrollTop = log.scrollHeight;
+    };
+
+    try {
+      if (mode === 'device') {
+        await local.send({ apiKey: deviceKey.get(), conversationId, message: text, emit: handle });
+      } else {
+        const res = await fetch('/api/ai/chat', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ message: text, conversationId }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new ApiError(res.status, data.error ?? res.statusText);
+        }
+        for await (const { event, data } of readEvents(res)) handle(event, data);
       }
       if (reply.classList.contains('thinking')) reply.remove();
     } catch (err) {
-      reply.remove();
+      if (reply.classList.contains('thinking')) reply.remove();
       bubble('error', err.message);
       if (err instanceof ApiError && err.status === 409) showSetup();
+      if (mode === 'device' && /key on this device was rejected/.test(err.message)) {
+        deviceKey.clear();
+        showSetup(err.message);
+      }
     } finally {
       busy = false;
       sendButton.disabled = false;

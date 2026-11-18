@@ -112,14 +112,8 @@ export class ChatService {
 
     const client = this.createClient(apiKey);
     const { id, convo } = this.#conversation(user.id, conversationId);
-    const { tools, call } = homeTools({ user, ...this.deps, by: `chat:${user.username}` });
-    const byName = new Map(tools.map((t) => [t.name, { tool: t, schema: z.object(t.shape) }]));
-    const apiTools = tools.map((t) => ({
-      name: t.name,
-      description: t.description,
-      input_schema: jsonSchema(t.shape),
-      eager_input_streaming: true,
-    }));
+    const kit = aiToolkit({ user, deps: this.deps, by: `chat:${user.username}` });
+    const apiTools = kit.definitions.map(({ title, ...t }) => ({ ...t, eager_input_streaming: true }));
 
     // Work on a copy so a failed turn leaves the stored conversation untouched.
     const messages = [...convo.messages, { role: 'user', content: text }];
@@ -133,10 +127,7 @@ export class ChatService {
         output_config: { effort: 'medium' },
         betas: ['server-side-fallback-2026-07-01'],
         fallbacks: 'default',
-        system: [
-          { type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } },
-          { type: 'text', text: `You are the HomeyVibe AI user, acting for ${user.displayName} (role: ${user.role}). You can only do what both of you are allowed to; get_home_overview lists your limits. Server time: ${new Date(this.now()).toString()}.` },
-        ],
+        system: systemBlocks(user, this.now()),
         tools: apiTools,
         messages,
       }, { signal });
@@ -169,16 +160,8 @@ export class ChatService {
       }
 
       const results = await Promise.all(toolUses.map(async (use) => {
-        const entry = byName.get(use.name);
-        emit('tool', { name: use.name, title: entry?.tool.title ?? use.name });
-        if (!entry) return toolResult(use.id, false, `Unknown tool ${use.name}`);
-        // Eager input streaming skips server-side validation, so check the input here.
-        const parsed = entry.schema.safeParse(use.input);
-        if (!parsed.success) {
-          emit('tool_result', { name: use.name, ok: false });
-          return toolResult(use.id, false, `Invalid input: ${z.prettifyError(parsed.error)}`);
-        }
-        const { ok, text: out } = await call(entry.tool, parsed.data);
+        emit('tool', { name: use.name, title: kit.title(use.name) });
+        const { ok, text: out } = await kit.run(use.name, use.input);
         emit('tool_result', { name: use.name, ok });
         return toolResult(use.id, ok, out);
       }));
@@ -194,6 +177,36 @@ export class ChatService {
   reset(userId, conversationId) {
     this.#conversations.get(userId)?.delete(conversationId);
   }
+}
+
+/** System prompt blocks for a chat with `user`; the first block is shared by everyone and cached. */
+export function systemBlocks(user, now = Date.now()) {
+  return [
+    { type: 'text', text: SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } },
+    { type: 'text', text: `You are the HomeyVibe AI user, acting for ${user.displayName} (role: ${user.role}). You can only do what both of you are allowed to; get_home_overview lists your limits. Server time: ${new Date(now).toString()}.` },
+  ];
+}
+
+/**
+ * The AI tools for one person, as plain data plus a runner. Used by the server-side chat and by
+ * clients that run the model themselves (GET/POST /api/ai/tools), so the server never has to.
+ * `run` validates the input against the tool's schema (eager input streaming skips that) and
+ * applies the person's and the AI user's permissions and limits.
+ */
+export function aiToolkit({ user, deps, by }) {
+  const { tools, call } = homeTools({ user, ...deps, by });
+  const byName = new Map(tools.map((t) => [t.name, { tool: t, schema: z.object(t.shape) }]));
+  return {
+    definitions: tools.map((t) => ({ name: t.name, title: t.title, description: t.description, input_schema: jsonSchema(t.shape) })),
+    title: (name) => byName.get(name)?.tool.title ?? name,
+    async run(name, input) {
+      const entry = byName.get(name);
+      if (!entry) return { ok: false, text: `Unknown tool ${name}` };
+      const parsed = entry.schema.safeParse(input ?? {});
+      if (!parsed.success) return { ok: false, text: `Invalid input: ${z.prettifyError(parsed.error)}` };
+      return call(entry.tool, parsed.data);
+    },
+  };
 }
 
 function jsonSchema(shape) {
