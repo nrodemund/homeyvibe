@@ -21,7 +21,7 @@ export async function openAiDialog(user) {
       : 'Connect an AI assistant to see and control your devices. Ask an admin if you want it to change pages and actions.'),
 
     h('section.ai-block', {},
-      h('h3', {}, '1. Connect Claude or Codex'),
+      h('h3', {}, 'Connect Codex or Claude Code'),
       h('p.muted', {}, 'Create a token, then paste the command or config into your AI tool. The AI acts with your permissions.'),
       tokenForm(),
       reveal,
@@ -29,8 +29,8 @@ export async function openAiDialog(user) {
     ),
 
     h('section.ai-block', {},
-      h('h3', {}, '2. Or use a context file'),
-      h('p.muted', {}, 'Download a description of your home, give it to any AI (ChatGPT, Claude, Gemini…), and ask it for pages and actions.'),
+      h('h3', {}, 'Use ChatGPT with a context file'),
+      h('p.muted', {}, 'Give the downloaded home description to ChatGPT or another assistant. Ask it to create a HomeyVibe configuration, then import its JSON response here.'),
       h('div.row', {},
         h('a.button', { href: '/api/ai/context', download: 'homeyvibe-context.md' }, 'Download context file'),
       ),
@@ -130,7 +130,7 @@ export async function openAiDialog(user) {
     };
     describe();
     return h('section.ai-block', {},
-      h('h3', {}, '3. Assistant on this device'),
+      h('h3', {}, 'Claude on this device'),
       h('p.muted', {}, 'Chat with Claude in HomeyVibe. Claude is called from your phone or computer, so a small server like a Raspberry Pi does no AI work and needs no internet access for it.'),
       state,
       forget,
@@ -139,33 +139,49 @@ export async function openAiDialog(user) {
 
   function assistantBlock(status) {
     const state = h('p.muted', { role: 'status' });
+    const provider = h('select', { name: 'provider' }, new Option('Claude', 'claude'), new Option('OpenAI', 'openai'));
+    provider.value = status.provider;
+    const key = h('input', { name: 'apiKey', type: 'password', autocomplete: 'new-password', maxLength: 512 });
+    const model = h('input', { name: 'model', maxLength: 128 });
+    const remove = h('button.icon-button', { type: 'button', onclick: async () => {
+      remove.disabled = true;
+      try {
+        describe(await api.updateAiSettings({ provider: provider.value, apiKey: null }));
+      } catch (err) {
+        toast(err.message);
+      } finally {
+        remove.disabled = false;
+      }
+    } }, 'Remove saved key');
     const describe = (s) => {
+      status = s;
+      const selected = provider.value === s.provider;
       state.textContent = s.configured
-        ? `Connected${s.keyHint ? ` with key ${s.keyHint}` : ' through the server environment'} · model ${s.model}`
-        : 'Not set up. Add a Claude API key to use the chat button in the corner.';
+        ? `Active provider: ${s.provider === 'openai' ? 'OpenAI' : 'Claude'} · ${s.model}${s.keyHint ? ` · key ${s.keyHint}` : ' · key from deployment'}`
+        : 'Add a project API key to enable the shared assistant.';
+      key.placeholder = provider.value === 'openai' ? 'sk-proj-…' : 'sk-ant-…';
+      model.placeholder = selected ? s.model : 'Provider default';
+      key.value = '';
+      model.value = '';
+      remove.hidden = s.source !== 'settings' || !selected;
     };
+    provider.addEventListener('change', () => describe(status));
     describe(status);
-    const form = h('form.inline-form', {},
-      field('Claude API key', h('input', { name: 'apiKey', type: 'password', placeholder: 'sk-ant-…', autocomplete: 'off', required: true })),
-      h('button.primary', { type: 'submit' }, status.configured ? 'Replace key' : 'Save key'),
+    const form = h('form.settings-fields', {},
+      field('Provider', provider),
+      field('Project API key', key),
+      field('Model', model),
+      h('div.row', {}, h('button.primary', { type: 'submit' }, 'Save assistant settings'), remove),
       h('p.form-error', { role: 'alert' }),
     );
-    onSubmit(form, async ({ apiKey }) => {
-      describe(await api.updateAiSettings({ apiKey }));
-      form.reset();
+    onSubmit(form, async ({ provider: selection, apiKey, model: modelId }) => {
+      describe(await api.updateAiSettings({ provider: selection, apiKey: apiKey.trim() || undefined, model: modelId.trim() || undefined }));
     });
-    const remove = status.source === 'settings'
-      ? h('button.icon-button', { type: 'button', onclick: async () => {
-        describe(await api.updateAiSettings({ apiKey: null }));
-        remove.remove();
-      } }, 'Remove saved key')
-      : null;
     return h('section.ai-block', {},
-      h('h3', {}, '4. Or a shared key on the server'),
-      h('p.muted', {}, 'Optional: devices without their own key then use this one, and the server calls Claude. Usage is billed to this key.'),
+      h('h3', {}, 'Shared assistant'),
+      h('p.muted', {}, 'Use a Claude or OpenAI project API key on the server. Devices with a local Claude key keep using it. API usage is billed to your provider project.'),
       state,
       form,
-      remove,
     );
   }
 
@@ -188,7 +204,9 @@ export function parseBundle(text) {
 function setupSnippets(mcpUrl, token) {
   const snippets = [
     ['Claude Code', `claude mcp add --transport http homeyvibe ${mcpUrl} --header "Authorization: Bearer ${token}"`],
-    ['Codex (~/.codex/config.toml, then export HOMEYVIBE_TOKEN)', `[mcp_servers.homeyvibe]\nurl = "${mcpUrl}"\nbearer_token_env_var = "HOMEYVIBE_TOKEN"\n\n# shell:\nexport HOMEYVIBE_TOKEN=${token}`],
+    ['Codex (~/.codex/config.toml)', `[mcp_servers.homeyvibe]\nurl = "${mcpUrl}"\nbearer_token_env_var = "HOMEYVIBE_TOKEN"`],
+    ['Start Codex on macOS or Linux', `export HOMEYVIBE_TOKEN='${token}'\ncodex`],
+    ['Start Codex in Windows PowerShell', `$env:HOMEYVIBE_TOKEN = '${token}'\ncodex`],
     ['Claude Desktop and other MCP apps (via mcp-remote)', JSON.stringify({
       mcpServers: { homeyvibe: { command: 'npx', args: ['-y', 'mcp-remote', mcpUrl, '--header', `Authorization: Bearer ${token}`] } },
     }, null, 2)],
@@ -202,14 +220,23 @@ function setupSnippets(mcpUrl, token) {
         h('button.icon-button', {
           type: 'button',
           onclick: async (e) => {
-            await navigator.clipboard?.writeText(code).catch(() => {});
-            e.target.textContent = 'Copied';
+            try {
+              await navigator.clipboard.writeText(code);
+              e.target.textContent = 'Copied';
+            } catch {
+              const range = document.createRange();
+              range.selectNodeContents(e.target.closest('.snippet').querySelector('pre'));
+              const selection = window.getSelection();
+              selection.removeAllRanges();
+              selection.addRange(range);
+              e.target.textContent = 'Selected';
+            }
             setTimeout(() => (e.target.textContent = 'Copy'), 1500);
           },
         }, 'Copy'),
       ),
       h('pre', {}, code),
     )),
-    h('p.muted', {}, 'Then ask your AI: “Set up my HomeyVibe home.”'),
+    h('p.muted', {}, 'Start Codex from a computer that can reach HomeyVibe. Then ask it to inspect your devices and propose a setup.'),
   ];
 }

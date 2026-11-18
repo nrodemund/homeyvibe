@@ -5,9 +5,9 @@ import { homeTools, TOOL_GUIDE } from './tools.js';
 /**
  * Build an MCP server bound to one signed-in user; every tool checks that user's permissions.
  */
-export function createMcpServer({ user, registry, pages, actions, engine, floorplan, access }) {
+export function createMcpServer({ user, ...deps }) {
   const server = new McpServer({ name: 'homeyvibe', version: '0.1.0' }, { instructions: TOOL_GUIDE });
-  const { tools, call } = homeTools({ user, registry, pages, actions, engine, floorplan, access });
+  const { tools, call } = homeTools({ user, ...deps });
 
   for (const tool of tools) {
     server.registerTool(tool.name, {

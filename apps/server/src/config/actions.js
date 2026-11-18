@@ -201,7 +201,8 @@ export class ActionEngine extends EventEmitter {
     }
   }
 
-  onState(device, changes) {
+  onState(device, changes, { retained = false } = {}) {
+    if (retained) return;
     for (const action of this.actions.list()) {
       if (!action.enabled) continue;
       const hit = action.triggers.some((t) =>

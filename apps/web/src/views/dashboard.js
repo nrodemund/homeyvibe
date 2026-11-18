@@ -4,6 +4,8 @@ import { h, toast } from '../ui.js';
 import { openUsersDialog } from './users.js';
 import { openAiDialog } from './ai.js';
 import { createChat } from './chat.js';
+import { openZigbeeDialog } from './zigbee.js';
+import { openConfigDialog } from './config.js';
 
 import { ICONS } from '../floorplan.js';
 
@@ -31,7 +33,7 @@ export function renderDashboard(root, user, onSignedOut) {
     </header>
     <nav class="tabs" aria-label="Pages"></nav>
     <main class="view" aria-live="polite"></main>
-    <p class="empty" hidden>No devices yet. Pair a device in zigbee2mqtt, or start the server with <code>npm run demo</code>.</p>
+    <div class="empty" hidden><p>No devices to display.</p></div>
   `;
   app.append(createChat(user));
   const view = app.querySelector('.view');
@@ -46,9 +48,15 @@ export function renderDashboard(root, user, onSignedOut) {
   const conn = app.querySelector('.conn');
   const empty = app.querySelector('.empty');
   const menu = app.querySelector('.menu');
+  const openZigbee = () => { menu.open = false; openZigbeeDialog().catch((e) => toast(e.message)); };
+  if (canEdit) empty.append(h('button', { type: 'button', onclick: openZigbee }, 'Check Zigbee2MQTT connection'));
+  const editConfig = (kind) => { menu.open = false; openConfigDialog(kind).catch((e) => toast(e.message)); };
   menu.querySelector('summary').textContent = user.displayName;
   menu.querySelector('.menu-items').append(...[
     h('p.muted', {}, `@${user.username} · ${user.role}`),
+    canEdit ? h('button', { type: 'button', onclick: openZigbee }, 'Zigbee2MQTT') : null,
+    canEdit ? h('button', { type: 'button', onclick: () => editConfig('pages') }, 'Pages') : null,
+    canEdit ? h('button', { type: 'button', onclick: () => editConfig('actions') }, 'Actions') : null,
     h('button', { type: 'button', onclick: () => { menu.open = false; openAiDialog(user).catch((e) => toast(e.message)); } }, 'Set up with AI'),
     user.permissions.includes('users:manage')
       ? h('button', { type: 'button', onclick: () => { menu.open = false; openUsersDialog(user).catch((e) => toast(e.message)); } }, 'People')
@@ -195,7 +203,7 @@ export function renderDashboard(root, user, onSignedOut) {
         return device ? renderCard(device, item.properties ?? null) : missing(`Device ${item.deviceId} not found`);
       });
       const onlyActions = sec.items.length > 0 && sec.items.every((i) => i.type === 'action');
-      view.append(section(sec.title, items, onlyActions ? 'actions' : 'devices'));
+      view.append(section(sec.title, items, onlyActions ? 'actions' : page.layout === 'list' ? 'list' : 'devices'));
     }
     if (!page.sections.length) view.append(h('p.empty', {}, 'This page is empty.'));
   }

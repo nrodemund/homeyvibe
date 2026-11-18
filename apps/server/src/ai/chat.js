@@ -3,6 +3,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { HttpError } from '../http/errors.js';
 import { homeTools, TOOL_GUIDE } from './tools.js';
+import { DEFAULT_OPENAI_MODEL, runOpenAiTurn } from './openai.js';
 
 export const DEFAULT_MODEL = 'claude-opus-5-5';
 const MAX_TURNS = 16;
@@ -20,7 +21,7 @@ ${TOOL_GUIDE}`;
 
 /**
  * API key and model for the in-app chat. The key comes from settings (set by an admin in the app)
- * or the ANTHROPIC_API_KEY environment variable; it is never sent back to clients.
+ * or the ANTHROPIC_API_KEY / OPENAI_API_KEY environment variables.
  */
 export class AiSettings {
   constructor({ store, env = process.env }) {
@@ -32,68 +33,88 @@ export class AiSettings {
     return this.store.read('ai-settings', {});
   }
 
-  apiKey() {
-    return this.#read().apiKey || this.env.ANTHROPIC_API_KEY || null;
+  provider() {
+    const saved = this.#read();
+    return saved.provider ?? (this.env.OPENAI_API_KEY && !this.env.ANTHROPIC_API_KEY && !saved.apiKey ? 'openai' : 'claude');
   }
 
-  model() {
-    return this.#read().model || DEFAULT_MODEL;
+  apiKey(provider = this.provider()) {
+    const saved = this.#read();
+    return (provider === 'openai' ? saved.openaiApiKey || this.env.OPENAI_API_KEY : saved.apiKey || this.env.ANTHROPIC_API_KEY) || null;
+  }
+
+  model(provider = this.provider()) {
+    const saved = this.#read();
+    return provider === 'openai' ? saved.openaiModel || DEFAULT_OPENAI_MODEL : saved.model || DEFAULT_MODEL;
   }
 
   status() {
-    const saved = this.#read();
+    const provider = this.provider();
+    const stored = this.#read();
+    const saved = provider === 'openai' ? stored.openaiApiKey : stored.apiKey;
+    const key = this.apiKey(provider);
     return {
-      configured: Boolean(this.apiKey()),
-      source: saved.apiKey ? 'settings' : this.env.ANTHROPIC_API_KEY ? 'environment' : null,
-      keyHint: saved.apiKey ? `…${saved.apiKey.slice(-4)}` : null,
-      model: this.model(),
+      provider,
+      configured: Boolean(key),
+      source: saved ? 'settings' : key ? 'environment' : null,
+      keyHint: saved ? `…${saved.slice(-4)}` : null,
+      model: this.model(provider),
     };
   }
 
-  update({ apiKey, model }) {
+  update({ apiKey, model, provider = this.provider() }) {
+    if (!['claude', 'openai'].includes(provider)) throw new HttpError(400, 'Choose Claude or OpenAI');
     const next = { ...this.#read() };
+    const keyField = provider === 'openai' ? 'openaiApiKey' : 'apiKey';
+    const modelField = provider === 'openai' ? 'openaiModel' : 'model';
     if (apiKey !== undefined) {
-      if (apiKey === null || apiKey === '') delete next.apiKey;
-      else if (typeof apiKey !== 'string' || !apiKey.startsWith('sk-ant-') || apiKey.length > 300) {
-        throw new HttpError(400, 'That does not look like a Claude API key (it starts with sk-ant-)');
-      } else next.apiKey = apiKey.trim();
+      const key = typeof apiKey === 'string' ? apiKey.trim() : apiKey;
+      const valid = provider === 'openai' ? /^sk-(?!ant-)\S+$/ : /^sk-ant-\S+$/;
+      if (key === null || key === '') delete next[keyField];
+      else if (typeof key !== 'string' || key.length > 512 || !valid.test(key)) {
+        throw new HttpError(400, `Enter a valid ${provider === 'openai' ? 'OpenAI' : 'Claude'} API key`);
+      } else next[keyField] = key;
     }
     if (model !== undefined) {
-      if (model === null || model === '') delete next.model;
-      else if (typeof model !== 'string' || !/^claude-[a-z0-9.-]+$/.test(model)) throw new HttpError(400, 'Invalid model id');
-      else next.model = model;
+      const valid = provider === 'openai' ? /^[a-z0-9][a-z0-9._:-]*$/ : /^claude-[a-z0-9.-]+$/;
+      if (model === null || model === '') delete next[modelField];
+      else if (typeof model !== 'string' || model.length > 128 || !valid.test(model)) throw new HttpError(400, 'Invalid model id');
+      else next[modelField] = model;
     }
+    next.provider = provider;
     this.store.write('ai-settings', next);
     return this.status();
   }
 }
 
 /**
- * In-app chat: a Claude tool-use loop over the same tools the MCP server offers,
+ * In-app chat loop over the same tools the MCP server offers,
  * with each tool checked against the signed-in user's permissions.
  * Conversations live in memory (they hold thinking blocks that must be sent back unchanged).
  */
 export class ChatService {
   #conversations = new Map(); // userId -> Map(conversationId -> { messages, updatedAt })
 
-  constructor({ settings, registry, pages, actions, engine, floorplan = null, access = null, createClient = (apiKey) => new Anthropic({ apiKey }), now = () => Date.now() }) {
+  constructor({ settings, registry, pages, actions, engine, floorplan = null, access = null, zigbee = null,
+    createClient = (apiKey) => new Anthropic({ apiKey }), openAiFetch, now = () => Date.now() }) {
     this.settings = settings;
-    this.deps = { registry, pages, actions, engine, floorplan, access };
+    this.deps = { registry, pages, actions, engine, floorplan, access, zigbee };
     this.createClient = createClient;
+    this.openAiFetch = openAiFetch;
     this.now = now;
   }
 
-  #conversation(userId, conversationId) {
+  #conversation(userId, conversationId, provider) {
     let mine = this.#conversations.get(userId);
     if (!mine) this.#conversations.set(userId, (mine = new Map()));
     for (const [id, c] of mine) if (this.now() - c.updatedAt > CONVERSATION_TTL_MS) mine.delete(id);
-    if (conversationId && mine.has(conversationId)) return { id: conversationId, convo: mine.get(conversationId) };
+    if (conversationId && mine.get(conversationId)?.provider === provider) return { id: conversationId, convo: mine.get(conversationId) };
     if (mine.size >= MAX_CONVERSATIONS_PER_USER) {
       const oldest = [...mine.entries()].sort((a, b) => a[1].updatedAt - b[1].updatedAt)[0][0];
       mine.delete(oldest);
     }
     const id = randomUUID();
-    const convo = { messages: [], updatedAt: this.now() };
+    const convo = { messages: [], updatedAt: this.now(), provider };
     mine.set(id, convo);
     return { id, convo };
   }
@@ -107,27 +128,40 @@ export class ChatService {
     const text = String(message ?? '').trim();
     if (!text) throw new HttpError(400, 'Say something first');
     if (text.length > MAX_MESSAGE_CHARS) throw new HttpError(400, `Keep messages under ${MAX_MESSAGE_CHARS} characters`);
-    const apiKey = this.settings.apiKey();
-    if (!apiKey) throw new HttpError(409, 'The AI chat is not set up yet. An admin can add a Claude API key in Set up with AI.');
+    const provider = this.settings.provider();
+    const apiKey = this.settings.apiKey(provider);
+    if (!apiKey) throw new HttpError(409, 'The AI chat is not set up yet. An admin can add an API key in Set up with AI.');
 
-    const client = this.createClient(apiKey);
-    const { id, convo } = this.#conversation(user.id, conversationId);
+    const { id, convo } = this.#conversation(user.id, conversationId, provider);
     const kit = aiToolkit({ user, deps: this.deps, by: `chat:${user.username}` });
-    const apiTools = kit.definitions.map(({ title, ...t }) => ({ ...t, eager_input_streaming: true }));
-
-    // Work on a copy so a failed turn leaves the stored conversation untouched.
     const messages = [...convo.messages, { role: 'user', content: text }];
+    const model = this.settings.model(provider);
+    const system = systemBlocks(user, this.now());
     emit('start', { conversationId: id });
+    if (provider === 'openai') {
+      await runOpenAiTurn({ apiKey, model, system, kit, messages, emit, signal, maxTurns: MAX_TURNS, fetchReply: this.openAiFetch });
+    } else {
+      await this.#runClaudeTurn({ apiKey, model, system, kit, messages, emit, signal });
+    }
+    convo.messages = messages;
+    convo.updatedAt = this.now();
+    emit('done', { conversationId: id });
+    return { conversationId: id };
+  }
+
+  async #runClaudeTurn({ apiKey, model, system, kit, messages, emit, signal }) {
+    const client = this.createClient(apiKey);
+    const apiTools = kit.definitions.map(({ title, ...t }) => ({ ...t, eager_input_streaming: true }));
 
     let jsonRetries = 0;
     for (let turn = 0; turn < MAX_TURNS; turn++) {
       const stream = client.beta.messages.stream({
-        model: this.settings.model(),
+        model,
         max_tokens: 64000,
         output_config: { effort: 'medium' },
         betas: ['server-side-fallback-2026-07-01'],
         fallbacks: 'default',
-        system: systemBlocks(user, this.now()),
+        system,
         tools: apiTools,
         messages,
       }, { signal });
@@ -152,12 +186,7 @@ export class ChatService {
       const toolUses = reply.content.filter((b) => b.type === 'tool_use');
       // A tool input cut off at max_tokens can parse as a valid partial object; never run it.
       if (reply.stop_reason === 'max_tokens' && toolUses.length) throw new HttpError(502, 'The reply was cut off. Try a smaller request.');
-      if (reply.stop_reason !== 'tool_use' || toolUses.length === 0) {
-        convo.messages = messages;
-        convo.updatedAt = this.now();
-        emit('done', { conversationId: id });
-        return { conversationId: id };
-      }
+      if (reply.stop_reason !== 'tool_use' || toolUses.length === 0) return;
 
       const results = await Promise.all(toolUses.map(async (use) => {
         emit('tool', { name: use.name, title: kit.title(use.name) });
@@ -168,10 +197,6 @@ export class ChatService {
       messages.push({ role: 'user', content: results });
     }
 
-    convo.messages = messages;
-    convo.updatedAt = this.now();
-    emit('done', { conversationId: id });
-    return { conversationId: id };
   }
 
   reset(userId, conversationId) {

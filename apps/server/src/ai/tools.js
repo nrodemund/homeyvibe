@@ -85,7 +85,7 @@ export const actionSchema = z.object({
  * Each tool: { name, title, description, shape (zod raw shape), annotations, permission, run(args) }.
  * `call(tool, args)` checks the permission and returns { ok, text }.
  */
-export function homeTools({ user: person, registry: fullRegistry, pages, actions, engine, floorplan = null, access = null, by = `ai:${person.username}` }) {
+export function homeTools({ user: person, registry: fullRegistry, pages, actions, engine, floorplan = null, access = null, zigbee = null, by = `ai:${person.username}` }) {
   // The AI gets what both the person and the AI user may do (see auth/access.js).
   const scope = access ? access.aiFor(person) : null;
   const user = scope?.user ?? person;
@@ -96,6 +96,15 @@ export function homeTools({ user: person, registry: fullRegistry, pages, actions
     return { ...plan, devices: plan.devices.filter((d) => registry.get(d.deviceId)) };
   };
   const tools = [
+    zigbee && {
+      name: 'diagnose_zigbee2mqtt',
+      title: 'Zigbee2MQTT connection',
+      description: 'Explain why Zigbee devices may be missing and what to check in Settings → Zigbee2MQTT. Use when discovery fails.',
+      shape: {},
+      annotations: { readOnlyHint: true },
+      permission: PERMISSIONS.CONFIG_WRITE,
+      run: () => zigbee.diagnosis(),
+    },
     {
       name: 'get_home_overview',
       title: 'Home overview',

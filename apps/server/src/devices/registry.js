@@ -49,11 +49,11 @@ export class DeviceRegistry extends EventEmitter {
     }
   }
 
-  updateState(id, changes) {
+  updateState(id, changes, metadata) {
     const device = this.#devices.get(id);
     if (!device) return;
     device.state = { ...device.state, ...changes };
-    this.emit('state', device, changes);
+    this.emit('state', device, changes, metadata);
   }
 
   setAvailable(id, available) {

@@ -7,6 +7,7 @@ import { JsonStore } from '../src/store/json-store.js';
 import { PageStore } from '../src/config/pages.js';
 import { ActionStore, ActionEngine } from '../src/config/actions.js';
 import { AiSettings, ChatService, DEFAULT_MODEL } from '../src/ai/chat.js';
+import { DEFAULT_OPENAI_MODEL } from '../src/ai/openai.js';
 import { startApi, api } from './helpers.js';
 
 /**
@@ -94,7 +95,7 @@ test('settings: not configured at first; only admins set the key; the key is nev
   assert.equal(bad.status, 400);
   const ok = await api(ctx.base, ctx.tokens.admin, '/api/ai/settings', { method: 'PATCH', body: { apiKey: 'sk-ant-test-1234' } });
   const status = await ok.json();
-  assert.deepEqual(status, { configured: true, source: 'settings', keyHint: '…1234', model: DEFAULT_MODEL });
+  assert.deepEqual(status, { provider: 'claude', configured: true, source: 'settings', keyHint: '…1234', model: DEFAULT_MODEL });
   assert.ok(!JSON.stringify(status).includes('sk-ant-test-1234'));
 });
 
@@ -188,4 +189,51 @@ test('chat: input limits', async () => {
   assert.equal((await sendChat(ctx.tokens.member, { message: '   ' })).status, 400);
   assert.equal((await sendChat(ctx.tokens.member, { message: 'x'.repeat(5000) })).status, 400);
   assert.equal((await sendChat(null, { message: 'hi' })).status, 401);
+});
+
+test('OpenAI shared assistant uses the same schema, access checks and tool feedback', async () => {
+  const store = new JsonStore(null);
+  const settings = new AiSettings({ store, env: { OPENAI_API_KEY: 'sk-proj-example-key' } });
+  assert.equal(settings.status().provider, 'openai');
+  assert.equal(settings.status().model, DEFAULT_OPENAI_MODEL);
+  assert.ok(!JSON.stringify(settings.status()).includes('sk-proj-example-key'));
+  const requests = [];
+  const role = { id: 'guest', role: 'guest', username: 'guest', displayName: 'Guest' };
+  const service = new ChatService({
+    settings, registry: env.registry, pages: env.pages, actions: env.actions,
+    openAiFetch: async (url, options) => {
+      assert.equal(url, 'https://api.openai.com/v1/chat/completions');
+      assert.equal(options.headers.authorization, 'Bearer sk-proj-example-key');
+      const body = JSON.parse(options.body);
+      assert.equal(body.store, false);
+      requests.push(body);
+      if (requests.length > 1) return Response.json({ choices: [{ finish_reason: 'stop', message: { content: 'View only.' } }] });
+      return Response.json({ choices: [{ finish_reason: 'tool_calls', message: { content: null, tool_calls: [{
+        id: 'call-1', type: 'function', function: { name: 'control_device', arguments: '{"deviceId":"demo:living_room_lamp","values":{"state":"ON"}}' },
+      }] } }] });
+    },
+  });
+  const events = [];
+  await service.send({ user: role, message: 'Turn it on', emit: (event, data) => events.push([event, data]) });
+  assert.equal(requests[0].model, DEFAULT_OPENAI_MODEL);
+  assert.equal(requests[0].messages[0].role, 'developer');
+  assert.ok(requests[0].tools.find((t) => t.function.name === 'control_device').function.parameters.properties.values);
+  assert.match(requests[1].messages.at(-1).content, /not allowed/);
+  assert.equal(requests[1].messages.at(-1).tool_call_id, 'call-1');
+  assert.deepEqual(events.map(([event]) => event), ['start', 'tool', 'tool_result', 'text', 'done']);
+  assert.equal(events[2][1].ok, false);
+});
+
+test('shared assistant keeps existing Claude settings when switching providers', () => {
+  const store = new JsonStore(null);
+  store.write('ai-settings', { apiKey: 'sk-ant-existing', model: 'claude-existing' });
+  const settings = new AiSettings({ store, env: {} });
+  assert.equal(settings.provider(), 'claude');
+  const openai = settings.update({ provider: 'openai', apiKey: 'sk-proj-new', model: 'gpt-5-mini' });
+  assert.equal(openai.provider, 'openai');
+  assert.equal(settings.model('claude'), 'claude-existing');
+  assert.equal(settings.apiKey(), 'sk-proj-new');
+  settings.update({ provider: 'claude' });
+  assert.equal(settings.apiKey(), 'sk-ant-existing');
+  assert.equal(settings.model(), 'claude-existing');
 });

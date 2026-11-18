@@ -13,21 +13,23 @@ npm test
 | Variable | Default | |
 |---|---|---|
 | `PORT` | `8080` | HTTP port |
-| `MQTT_URL` | `mqtt://localhost:1883` | Broker zigbee2mqtt publishes to |
+| `MQTT_URL` | `auto` | Broker Zigbee2MQTT publishes to. Set an explicit broker URL, or leave the value empty to disable MQTT. |
 | `MQTT_USERNAME` / `MQTT_PASSWORD` | | Broker credentials |
-| `Z2M_BASE_TOPIC` | `zigbee2mqtt` | zigbee2mqtt `base_topic` |
+| `Z2M_BASE_TOPIC` | empty | Exact Zigbee2MQTT base topic. A blank value detects a single-level topic. |
 | `HOMEYVIBE_DATA_DIR` | `apps/server/data` | Where users and sessions are stored |
 | `HOMEYVIBE_DEMO` | | `1` loads simulated devices |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | | Optional project keys for the shared assistant |
 
 ## zigbee2mqtt provider
 
-Nothing to configure per device. The provider subscribes to:
+Admins can change the connection and check discovery status in **Zigbee2MQTT** in the user menu. Saved fields override environment defaults. The provider subscribes to:
 
 - `<base>/bridge/devices` (retained): every device and its `exposes`, turned into capabilities
+- `<base>/bridge/state`: bridge online/offline state
 - `<base>/<friendly_name>`: live state
 - `<base>/<friendly_name>/availability`: online or offline (needs availability enabled in zigbee2mqtt)
 
-Renames and removals in zigbee2mqtt are picked up automatically. Device ids are stable (`z2m:<ieee_address>`).
+Renames and removals in Zigbee2MQTT are picked up automatically. Device IDs are stable (`z2m:<ieee_address>`). Retained state initializes device controls after discovery or reconnect. State triggers run on live reports.
 
 Each capability has `property`, `name`, `type` (`binary`, `numeric`, `enum`, `text`, `composite`, `list`), `group` (e.g. `light`, `switch_left`), `readable` / `writable` / `gettable`, plus type details such as `unit`, `min`, `max`, `values`, `valueOn` / `valueOff`.
 
@@ -92,7 +94,7 @@ Coordinates are meters seen from above (`points` are `[x, z]` corners in order; 
 
 ## AI configuration
 
-Two ways to let an AI find devices, build pages and create actions. Both are under **Set up with AI** in the web app's user menu.
+The **Set up with AI** dialog offers MCP, the built-in assistant and a context file.
 
 ### Client-side assistant (recommended, e.g. for a Raspberry Pi)
 
@@ -124,6 +126,7 @@ Apps that only speak stdio (e.g. Claude Desktop) can use `npx -y mcp-remote http
 |---|---|---|
 | `get_home_overview` | read | devices with capabilities and state, pages, actions |
 | `list_devices` | read | search by name, vendor, model or id |
+| `diagnose_zigbee2mqtt` | config | explain the current discovery status with generic troubleshooting guidance |
 | `control_device` | control | set capability values |
 | `run_action` | control | run an action now |
 | `apply_configuration` | config | create or update many pages and actions at once, all-or-nothing |
@@ -138,12 +141,12 @@ The prompt `set_up_my_home` asks the AI to propose pages and actions and apply t
 
 ### Server-side assistant (optional)
 
-When a device has no key of its own, the chat button can use a shared key on the server instead. The server then calls Claude (`claude-opus-5-5` by default) with the same tools as the MCP server, limited by each person's role. An admin adds the key under **Set up with AI** (stored in the data directory and never sent back to browsers), or sets `ANTHROPIC_API_KEY` for the server. Usage is billed to that key.
+Browsers without a local Claude key can use a shared OpenAI (`gpt-5-mini` by default) or Claude (`claude-opus-5-5` by default) project key. An admin chooses the provider and model under **Set up with AI → Shared assistant**. The server can also read `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` from its environment. Browsers receive only the provider, model and key status. The tools keep the same permissions and limits as MCP. Usage is billed to the provider’s API project.
 
 - `POST /api/ai/chat` with `{ message, conversationId? }` streams Server-Sent Events: `start`, `text` (`delta`), `tool` / `tool_result`, `done`, `error`.
 - Turning things on and off happens straight away. The assistant describes deletions and bulk configuration changes first and waits for a yes.
 - Conversations are kept in memory for 6 hours (10 per person).
-- Requests use server-side refusal fallbacks (`fallbacks: "default"`) and prompt caching for the tool definitions and instructions.
+- Claude requests use server-side refusal fallbacks (`fallbacks: "default"`) and prompt caching for the tool definitions and instructions.
 
 ### Access tokens
 
@@ -163,6 +166,8 @@ Everything except health and sign-in needs a session.
 | GET | `/api/auth/me` | signed in |
 | GET | `/api/roles` | signed in |
 | GET | `/api/devices`, `/api/devices/:id` | guest and up |
+| GET, PUT, DELETE | `/api/integrations/zigbee2mqtt` | admin. Read status, replace settings (`mode`, `url`, `username`, `password`, `baseTopic`) or restore defaults. Password is write-only. |
+| POST | `/api/integrations/zigbee2mqtt/retry` | admin. Reconnect and rediscover using active settings. |
 | GET | `/api/events` | guest and up: Server-Sent Events, `snapshot` on connect, then `device`, `removed`, `state` (`{ id, changes }`), `pages`, `actions`, `run` |
 | POST | `/api/devices/:id/set` | member and up: `{ "brightness": 120, "state": "ON" }`, validated against capabilities, returns 202 |
 | GET, POST | `/api/users` | admin |
@@ -171,4 +176,5 @@ Everything except health and sign-in needs a session.
 | GET | `/api/pages`, `/api/pages/:id`, `/api/actions`, `/api/actions/:id` | guest and up |
 | POST, PATCH, DELETE | `/api/pages[/:id]`, `/api/actions[/:id]` | admin (`config:write`) |
 | POST | `/api/actions/:id/run` | member and up, returns `{ ok, error?, by, startedAt, finishedAt }` |
+| GET, PATCH | `/api/ai/settings` | signed-in users can read status. Admins may update `{ provider?, apiKey?, model? }`. |
 

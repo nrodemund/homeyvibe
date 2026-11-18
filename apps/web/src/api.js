@@ -37,13 +37,27 @@ export const api = {
   updateAiSettings: (changes) => request('/api/ai/settings', { method: 'PATCH', body: changes }),
   forgetChat: (id) => request(`/api/ai/chat/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   devices: () => request('/api/devices'),
+  zigbee: () => request('/api/integrations/zigbee2mqtt'),
+  saveZigbee: (body) => request('/api/integrations/zigbee2mqtt', { method: 'PUT', body }),
+  resetZigbee: () => request('/api/integrations/zigbee2mqtt', { method: 'DELETE' }),
+  retryZigbee: () => request('/api/integrations/zigbee2mqtt/retry', { method: 'POST' }),
   access: () => request('/api/access'),
   setAiAccess: (limits) => request('/api/access/ai', { method: 'PUT', body: limits }),
   setUserAccess: (id, limits) => request(`/api/access/users/${encodeURIComponent(id)}`, { method: 'PUT', body: limits }),
   pages: () => request('/api/pages'),
+  savePage: (page) => saveConfig('/api/pages', page),
+  deletePage: (id) => request(`/api/pages/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   floorplan: () => request('/api/floorplan'),
   saveFloorplan: (plan) => request('/api/floorplan', { method: 'PUT', body: plan }),
   actions: () => request('/api/actions'),
+  saveAction: (action) => saveConfig('/api/actions', action),
+  deleteAction: (id) => request(`/api/actions/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   runAction: (id) => request(`/api/actions/${encodeURIComponent(id)}/run`, { method: 'POST' }),
   setDevice: (id, values) => request(`/api/devices/${encodeURIComponent(id)}/set`, { method: 'POST', body: values }),
 };
+
+function saveConfig(path, body) {
+  return body.id
+    ? request(`${path}/${encodeURIComponent(body.id)}`, { method: 'PATCH', body })
+    : request(path, { method: 'POST', body });
+}

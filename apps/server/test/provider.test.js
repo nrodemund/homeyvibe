@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
 import { DeviceRegistry } from '../src/devices/registry.js';
 import { createZigbee2mqttProvider } from '../src/providers/zigbee2mqtt/index.js';
 import { FakeMqttClient, bridgeDevices } from './helpers.js';
@@ -14,7 +15,12 @@ function setup() {
 
 test('subscribes to bridge, state and availability topics', () => {
   const { client } = setup();
-  assert.deepEqual(client.subscriptions, ['zigbee2mqtt/bridge/devices', 'zigbee2mqtt/+', 'zigbee2mqtt/+/availability']);
+  assert.deepEqual(client.subscriptions, [
+    'zigbee2mqtt/bridge/devices', 'zigbee2mqtt/bridge/state',
+    ...['living_room_lamp', 'bathroom_sensor', 'double_switch'].flatMap((name) => [
+      `zigbee2mqtt/${name}`, `zigbee2mqtt/${name}/availability`,
+    ]),
+  ]);
 });
 
 test('discovers devices and skips the coordinator', () => {
@@ -70,4 +76,52 @@ test('commands are validated and published to the set topic', async () => {
   await assert.rejects(registry.command('z2m:0x00158d0000000002', { temperature: 20 }), /read-only/);
   await assert.rejects(registry.command('z2m:nope', { state: 'ON' }), { status: 404 });
   assert.equal(client.published.length, 1);
+});
+
+test('discovers the base topic and follows retained state for names with slashes', async () => {
+  const client = new FakeMqttClient();
+  const registry = new DeviceRegistry();
+  const provider = createZigbee2mqttProvider({ client, registry, baseTopic: '', discoveryWindow: 1 });
+  try {
+    assert.deepEqual(client.subscriptions, ['+/bridge/devices']);
+    const added = once(registry, 'device:added');
+    client.receive('mqtt/bridge/devices', [null, { friendly_name: 'Unrelated' }]);
+    const list = JSON.parse(bridgeDevices);
+    list[1].friendly_name = 'living-room/lamp';
+    client.receive('house/bridge/devices', list);
+    const [lamp] = await added;
+    assert.equal(lamp.name, 'living-room/lamp');
+    assert.ok(client.subscriptions.includes('house/living-room/lamp'));
+    assert.ok(client.subscriptions.includes('house/living-room/lamp/availability'));
+    assert.ok(!client.subscriptions.includes('+/bridge/devices'));
+    const state = once(registry, 'state');
+    client.receive('house/living-room/lamp', { brightness: 100 }, { retain: true });
+    assert.deepEqual((await state).slice(1), [{ brightness: 100 }, { retained: true }]);
+    await registry.command(lamp.id, { brightness: 150 });
+    assert.equal(client.published.at(-1).topic, 'house/living-room/lamp/set');
+
+    client.receive('house/bridge/state', { state: 'offline' });
+    await assert.rejects(registry.command(lamp.id, { brightness: 125 }), { status: 503 });
+    client.receive('house/living-room/lamp/availability', 'offline');
+    client.receive('house/bridge/state', { state: 'online' });
+    assert.equal(registry.get(lamp.id).available, false);
+    client.end();
+    assert.equal(registry.list().every((device) => device.available === false), true);
+  } finally {
+    provider.close();
+  }
+});
+
+test('auto discovery reports multiple bridges and leaves control disabled until one is selected', async () => {
+  const client = new FakeMqttClient();
+  const registry = new DeviceRegistry();
+  const status = new Promise((resolve) => {
+    createZigbee2mqttProvider({ client, registry, baseTopic: '', discoveryWindow: 1, report: (s) => {
+      if (s.phase === 'multiple-bridges') resolve(s);
+    } });
+  });
+  client.receive('house/bridge/devices', bridgeDevices);
+  client.receive('garage/bridge/devices', []);
+  assert.deepEqual((await status).candidates, ['garage', 'house']);
+  assert.equal(registry.list().length, 0);
 });

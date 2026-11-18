@@ -11,13 +11,20 @@ export class FakeMqttClient extends EventEmitter {
   subscribe(topics) {
     this.subscriptions.push(...[].concat(topics));
   }
+  unsubscribe(topics) {
+    this.subscriptions = this.subscriptions.filter((topic) => !topics.includes(topic));
+  }
+  end() {
+    this.connected = false;
+    this.emit('close');
+  }
   publish(topic, payload, cb) {
     this.published.push({ topic, payload });
     cb?.();
   }
-  receive(topic, payload) {
+  receive(topic, payload, packet) {
     const buf = Buffer.isBuffer(payload) ? payload : Buffer.from(typeof payload === 'string' ? payload : JSON.stringify(payload));
-    this.emit('message', topic, buf);
+    this.emit('message', topic, buf, packet);
   }
 }
 
