@@ -9,3 +9,6 @@
 **/*.log
 coverage
 docker-compose*.yml
+**/cloud-credentials
+**/connector-credentials
+**/web-certificate

@@ -1,0 +1,45 @@
+# Add this file to the existing HomeyVibe Compose project with -f.
+# Paths resolve against the directory of the first Compose file.
+services:
+  remote-tls:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      HOMEYVIBE_PUBLIC_HOST: ${HOMEYVIBE_PUBLIC_HOST:?Set HOMEYVIBE_PUBLIC_HOST in the HomeyVibe .env file}
+    volumes:
+      - type: bind
+        source: ./relay/Caddyfile
+        target: /etc/caddy/Caddyfile
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./relay/web-certificate
+        target: /run/homeyvibe-tls
+        read_only: true
+        bind:
+          create_host_path: false
+
+  remote-connector:
+    image: ghcr.io/fatedier/frpc:v0.71.1
+    command: ["-c", "/etc/frp/frpc.toml"]
+    restart: unless-stopped
+    depends_on: [remote-tls]
+    environment:
+      HOMEYVIBE_PUBLIC_HOST: ${HOMEYVIBE_PUBLIC_HOST:?Set HOMEYVIBE_PUBLIC_HOST in the HomeyVibe .env file}
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    volumes:
+      - type: bind
+        source: ./relay/frpc.toml
+        target: /etc/frp/frpc.toml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./relay/connector-credentials
+        target: /run/relay
+        read_only: true
+        bind:
+          create_host_path: false

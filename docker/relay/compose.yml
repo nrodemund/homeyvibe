@@ -2,18 +2,25 @@ name: homeyvibe-relay
 
 services:
   relay:
-    image: tailscale/tailscale:stable
+    image: ghcr.io/fatedier/frps:v0.71.1
+    command: ["-c", "/etc/frp/frps.toml"]
     restart: unless-stopped
-    network_mode: host
-    environment:
-      TS_HOSTNAME: homeyvibe-relay
-      TS_STATE_DIR: /var/lib/tailscale
-      TS_USERSPACE: "true"
-      TS_AUTH_ONCE: "true"
-      TS_ACCEPT_DNS: "false"
-      TS_AUTHKEY: ${TS_AUTHKEY:-}
+    ports:
+      - "443:8443/tcp"
+      - "7000:7000/tcp"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     volumes:
-      - relay-state:/var/lib/tailscale
-
-volumes:
-  relay-state:
+      - type: bind
+        source: ./frps.toml
+        target: /etc/frp/frps.toml
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./cloud-credentials
+        target: /run/relay
+        read_only: true
+        bind:
+          create_host_path: false

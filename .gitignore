@@ -10,3 +10,6 @@ out/
 coverage/
 .vite/
 apps/server/data/
+cloud-credentials/
+connector-credentials/
+web-certificate/

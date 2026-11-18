@@ -1,0 +1,12 @@
+bindPort = 7000
+allowPorts = [{ single = 8443 }]
+maxPortsPerClient = 1
+
+auth.method = "token"
+auth.tokenSource.type = "file"
+auth.tokenSource.file.path = "/run/relay/token"
+auth.additionalScopes = ["HeartBeats", "NewWorkConns"]
+
+transport.tls.force = true
+transport.tls.certFile = "/run/relay/control.crt"
+transport.tls.keyFile = "/run/relay/control.key"

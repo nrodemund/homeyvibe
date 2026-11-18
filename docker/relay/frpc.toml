@@ -1,0 +1,19 @@
+serverAddr = "{{ .Envs.HOMEYVIBE_PUBLIC_HOST }}"
+serverPort = 7000
+loginFailExit = false
+
+auth.method = "token"
+auth.tokenSource.type = "file"
+auth.tokenSource.file.path = "/run/relay/token"
+auth.additionalScopes = ["HeartBeats", "NewWorkConns"]
+
+transport.tls.enable = true
+transport.tls.trustedCaFile = "/run/relay/control.crt"
+transport.tls.serverName = "homeyvibe-relay"
+
+[[proxies]]
+name = "homeyvibe-https"
+type = "tcp"
+localIP = "remote-tls"
+localPort = 8443
+remotePort = 8443
