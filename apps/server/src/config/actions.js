@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { checkTimer, validateTimerInput } from '../devices/timers.js';
 import { HttpError } from '../http/errors.js';
 import { Validator, ID_RE, slugify } from './validate.js';
 import { uniqueId } from './pages.js';
@@ -78,6 +79,9 @@ export function normalizeAction(input) {
   v.string(input.description, 'description', { max: 500, optional: true });
   const steps = input.steps ?? [];
   const triggers = input.triggers ?? [];
+  const security = input.security ?? 'none';
+  v.oneOf(security, ['none', 'confirm', 'passkey'], 'security');
+  if (security !== 'none') v.check(!triggers.length, 'A protected action must be started manually');
 
   if (v.array(steps, 'steps', { max: 50 })) {
     v.check(steps.length > 0, 'steps must contain at least one step');
@@ -88,6 +92,7 @@ export function normalizeAction(input) {
         v.string(step.deviceId, `${path}.deviceId`);
         v.check(step.values && typeof step.values === 'object' && !Array.isArray(step.values) && Object.keys(step.values).length > 0,
           `${path}.values must be an object like { "state": "ON" }`);
+        if (step.timer !== undefined) validateTimerInput(step.timer, path, v);
       } else if (step.type === 'delay') {
         v.check(typeof step.seconds === 'number' && step.seconds > 0 && step.seconds <= MAX_DELAY_S,
           `${path}.seconds must be between 0 and ${MAX_DELAY_S}`);
@@ -124,8 +129,9 @@ export function normalizeAction(input) {
     name: input.name.trim(),
     description: input.description?.trim() ?? null,
     enabled: input.enabled !== false,
+    ...(security !== 'none' || input.security !== undefined ? { security } : {}),
     steps: steps.map((s) =>
-      s.type === 'set' ? { type: 'set', deviceId: s.deviceId, values: s.values }
+      s.type === 'set' ? { type: 'set', deviceId: s.deviceId, values: s.values, ...(s.timer ? { timer: s.timer } : {}) }
         : s.type === 'delay' ? { type: 'delay', seconds: s.seconds }
           : { type: 'run', actionId: s.actionId }),
     triggers: triggers.map((t) =>
@@ -173,16 +179,31 @@ export class ActionEngine extends EventEmitter {
   }
 
   /** Run an action now. `by` describes who started it, e.g. "user:niklas", "trigger", "ai". */
-  async run(id, { by = 'manual', depth = 0 } = {}) {
-    const action = this.actions.get(id);
+  async run(id, { by = 'manual', depth = 0, approved = null, plan = null } = {}) {
+    const action = plan?.get(id) ?? this.actions.get(id);
     if (!action) throw new HttpError(404, `Unknown action ${id}`);
     if (depth > MAX_DEPTH) throw new HttpError(400, `Action nesting deeper than ${MAX_DEPTH}`);
     const startedAt = this.now().toISOString();
     try {
+      if (depth === 0) {
+        plan = new Map(this.actions.list().map((entry) => [entry.id, entry]));
+        checkActionSteps(id, (child) => plan.get(child), () => {}, 0, (entry, level) => {
+          if (entry.security && entry.security !== 'none' && (level > 0 || JSON.stringify(entry) !== approved)) {
+            throw new HttpError(403, 'This action requires approval in HomeyVibe');
+          }
+          for (const step of entry.steps) {
+            if (step.type !== 'set' || !step.timer) continue;
+            const device = this.registry.get(step.deviceId);
+            if (!device) throw new HttpError(404, 'Unknown device in timed step');
+            if (!this.registry.timers) throw new HttpError(503, 'Device timers are unavailable');
+            checkTimer(device, step.timer);
+          }
+        });
+      }
       for (const step of action.steps) {
-        if (step.type === 'set') await this.registry.command(step.deviceId, step.values);
+        if (step.type === 'set') await this.registry.command(step.deviceId, step.values, step.timer);
         else if (step.type === 'delay') await this.sleep(step.seconds * 1000);
-        else await this.run(step.actionId, { by: `action:${id}`, depth: depth + 1 });
+        else await this.run(step.actionId, { by: `action:${id}`, depth: depth + 1, plan });
       }
       const result = { actionId: id, by, ok: true, startedAt, finishedAt: this.now().toISOString() };
       if (depth === 0) this.emit('run', result);
@@ -232,13 +253,17 @@ export class ActionEngine extends EventEmitter {
 }
 
 /** Validate commands before running or referencing an action, including nested steps. */
-export function checkActionSteps(id, lookup, check, depth = 0) {
+export function checkActionSteps(id, lookup, check, depth = 0, visit = () => {}) {
   const action = lookup(id);
   if (!action) throw new HttpError(404, `Unknown action ${id}`);
   if (depth > MAX_DEPTH) throw new HttpError(400, `Action nesting deeper than ${MAX_DEPTH}`);
+  visit(action, depth);
   for (const step of action.steps) {
-    if (step.type === 'set') check(step.deviceId, step.values);
-    else if (step.type === 'run') checkActionSteps(step.actionId, lookup, check, depth + 1);
+    if (step.type === 'set') {
+      check(step.deviceId, step.values);
+      if (step.timer) check(step.deviceId, step.timer.values);
+    }
+    else if (step.type === 'run') checkActionSteps(step.actionId, lookup, check, depth + 1, visit);
   }
 }
 

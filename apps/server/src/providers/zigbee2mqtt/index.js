@@ -167,7 +167,10 @@ export function createZigbee2mqttProvider({
     // A device's name can itself end in /availability. Prefer its exact state topic.
     if (names.has(rest)) {
       if (data && typeof data === 'object' && !Array.isArray(data)) {
-        registry.updateState(names.get(rest), data, { retained: packet?.retain === true });
+        registry.updateState(names.get(rest), data, {
+          retained: packet?.retain === true,
+          ...(Object.hasOwn(data, 'action') ? { eventProperties: ['action'] } : {}),
+        });
       }
       return;
     }

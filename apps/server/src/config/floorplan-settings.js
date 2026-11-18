@@ -1,7 +1,8 @@
-import { CLICK_MODES, DISPLAYS, NUMERIC_DISPLAYS, ROOM_STYLES } from '../../../../packages/shared/src/floorplan.js';
+import { CHART_RANGES, CLICK_MODES, DISPLAYS, NUMERIC_DISPLAYS, ROOM_STYLES } from '../../../../packages/shared/src/floorplan.js';
 import { validateValue } from '../providers/zigbee2mqtt/capabilities.js';
 import { ID_RE } from './validate.js';
 import { checkActionSteps } from './actions.js';
+import { checkTimer, validateTimerInput } from '../devices/timers.js';
 
 const color = (value) => typeof value === 'string' && /^#[\da-f]{6}$/i.test(value);
 const number = (value, min = -Infinity, max = Infinity) => Number.isFinite(value) && value >= min && value <= max;
@@ -55,6 +56,9 @@ export function roomSettings(room, path, v) {
 /** Validate and copy the optional display, click and lighting fields of one placement. */
 export function placementSettings(placement, path, v) {
   const extras = {};
+  if (placement.hidden !== undefined && v.check(typeof placement.hidden === 'boolean', `${path}.hidden must be a boolean`) && placement.hidden) {
+    extras.hidden = true;
+  }
   if (placement.display !== undefined && v.check(record(placement.display), `${path}.display must be an object`)) {
     const d = pick(placement.display, ['mode', 'property', 'min', 'max', 'threshold', 'lowColor', 'highColor']);
     v.oneOf(d.mode, Object.keys(DISPLAYS), `${path}.display.mode`);
@@ -75,13 +79,21 @@ export function placementSettings(placement, path, v) {
       v.check(record(values) && Object.keys(values).length > 0 && Object.keys(values).length <= 32 &&
         Object.keys(values).every((key) => key.length > 0 && key.length <= 64 && key !== '__proto__'),
       `${path}.click.values must contain 1 to 32 device properties`);
-      extras.click = { mode, values };
+      if (placement.click.timer !== undefined) validateTimerInput(placement.click.timer, `${path}.click`, v);
+      extras.click = { mode, values, ...(placement.click.timer ? { timer: placement.click.timer } : {}) };
     } else if (mode === 'action') {
       v.check(typeof actionId === 'string' && ID_RE.test(actionId), `${path}.click.actionId must identify an action`);
       extras.click = { mode, actionId };
     } else if (mode === 'message') {
       v.string(message, `${path}.click.message`, { max: 200 });
       extras.click = { mode, message };
+    } else if (mode === 'chart') {
+      const chart = pick(placement.click, ['mode', 'property', 'range', 'min', 'max']);
+      v.string(chart.property, `${path}.click.property`, { max: 64 });
+      if ('range' in chart) v.oneOf(chart.range, Object.keys(CHART_RANGES), `${path}.click.range`);
+      for (const key of ['min', 'max']) if (key in chart) v.check(number(chart[key]), `${path}.click.${key} must be finite`);
+      if ('min' in chart && 'max' in chart) v.check(chart.min < chart.max, `${path}.click.max must be above min`);
+      extras.click = chart;
     } else if (mode === 'none') extras.click = { mode };
   }
   if (placement.light !== undefined && v.check(record(placement.light), `${path}.light must be an object`)) {
@@ -113,6 +125,9 @@ export function checkPlacementSettings(plan, previous, { registry, lookupAction,
     }
     const click = entry.click;
     if (!click || unchanged('click')) continue;
+    if (click.mode === 'chart' && !device?.capabilities.some((cap) => cap.property === click.property && cap.readable && cap.type === 'numeric')) {
+      errors.push(`${path}.click.property must be a readable numeric device property`);
+    }
     if (click.mode === 'command' || click.mode === 'action') {
       if (!canControl || device?.access === 'view') errors.push(`${path}.click needs device control permission`);
       if (click.mode === 'command') {
@@ -122,6 +137,10 @@ export function checkPlacementSettings(plan, previous, { registry, lookupAction,
           if (problem) errors.push(`${path}.click: ${problem}`);
         }
         try { registry.check?.(entry.deviceId, click.values); } catch (err) { errors.push(`${path}.click: ${err.message}`); }
+        if (click.timer && device) try {
+          checkTimer(device, click.timer);
+          registry.check?.(entry.deviceId, click.timer.values);
+        } catch (err) { errors.push(`${path}.click.timer: ${err.message}`); }
       } else {
         try {
           checkActionSteps(click.actionId, lookupAction, registry.check ?? (() => {}));

@@ -98,7 +98,20 @@ Coordinates are meters seen from above (`points` are `[x, z]` corners in order; 
 - Room `openings` entries have `type` (`door` or `window`), `edge` (zero-based index of the wall's first corner), `offset`, `width`, `bottom` and `height`. Lengths are measured in meters. `bottom` is zero for a door and defaults to 0.8 for a window.
 - A placement's `display` has a `mode` and optional `property`, `min`, `max`, `threshold`, `lowColor` and `highColor`. Modes are `auto`, `value`, `color`, `badge`, `bar`, `gauge`, `chart`, `trend`, `thermometer`, `threshold`, `status` and `icon`.
 - `click` modes are `details` (the default), `command` with capability `values`, `action` with `actionId`, `message` with text, and `none`. The client uses the regular device or action endpoint. `light` supports `enabled`, `color` and `strength` (0–2).
-- `GET /api/devices/:id/history?property=temperature` returns `{ points: [[timestampMs, value], …] }` for a visible, readable numeric capability. The server keeps the latest sample per five-minute interval for up to 24 hours in memory.
+- `GET /api/devices/:id/history?property=temperature&range=24h` returns `{ points: [[timestampMs, value], …], persistent, manual }` for a visible, readable numeric capability. Ranges are `2h`, `24h`, `30d` and `all`. The API returns the newest 20,000 points per resolution for very long histories.
+- `click.mode: "chart"` accepts a numeric `property`, `range` and optional `min`/`max`. Rooms may include a separate `objects` array for catalog meshes with `id`, `type`, `name`, `floor`, `roomId`, `position`, `size`, `rotation` in degrees and hex `color`.
+
+## Device history
+
+Node 22.13 or later opens `history.sqlite` automatically in `HOMEYVIBE_DATA_DIR`. A visible numeric value is sampled only when it changes. The server keeps the latest change per minute in memory for two hours. Configured charts, trends and readings selected by an admin also retain the latest change per five minutes for 24 hours, per hour for 30 days, and per four hours indefinitely. Expired rows are pruned at startup and hourly. Command activity and discrete changes such as door state and button presses are recorded with exact timestamps. Older Node runtimes use memory for recent readings and activity.
+
+## Action approval, timers and notifications
+
+Protected actions use `security: "confirm"` or `"passkey"`. A browser session requests a short-lived approval nonce and submits it with the run. The nonce is tied to the signed-in session and the exact action configuration. Passkey verification requires user verification and is scoped to the HTTPS origin. Protected actions are run as top-level manual actions. Configure them through the signed-in Actions editor.
+
+An action set step or 3D command can include a `timer: { seconds, values }`, where `values` are the shutdown settings. The server serializes commands and timer edits per device, and stores the current countdown in its data folder. A repeat activation replaces the previous timer. A matching explicit off command clears it. A pending shutoff retries when its device becomes available.
+
+Each signed-in browser can subscribe to push notifications for all visible devices or a selected list. The server generates Web Push keys on first run and only sends to subscribed push services. Alerts stop when the session signs out or expires. `HOMEYVIBE_PUSH_SUBJECT` optionally sets the VAPID contact URL.
 
 ## AI configuration
 
@@ -175,6 +188,15 @@ Everything except health and sign-in needs a session.
 | GET | `/api/roles` | signed in |
 | GET | `/api/devices`, `/api/devices/:id` | guest and up |
 | GET | `/api/devices/:id/history?property=…` | any user who can see the device |
+| PUT | `/api/devices/:id/history` | admin, set `{ property, enabled }` for long-term history |
+| GET | `/api/devices/:id/activity?before=…` | visible device, newest 100 events for the requested cursor |
+| GET | `/api/timers` | visible timers |
+| POST | `/api/devices/:id/timed` | device control, `{ values, timer: { seconds, values } }` |
+| PATCH | `/api/devices/:id/timer` | device control, `{ seconds }` from now or `null` to cancel |
+| GET, PUT, DELETE | `/api/notifications` | own signed-in browser notification settings |
+| GET, POST | `/api/auth/passkeys` | own signed-in browser passkeys and registration |
+| POST | `/api/auth/passkeys/options`, `/api/auth/passkeys/remove` | signed-in session and account password |
+| POST | `/api/actions/:id/approval` | request approval from a browser session with device control |
 | GET, PUT, DELETE | `/api/integrations/zigbee2mqtt` | admin. Read status, replace settings (`mode`, `url`, `username`, `password`, `baseTopic`) or restore defaults. Password is write-only. |
 | POST | `/api/integrations/zigbee2mqtt/retry` | admin. Reconnect and rediscover using active settings. |
 | GET | `/api/events` | guest and up: Server-Sent Events, `snapshot` on connect, then `device`, `removed`, `state` (`{ id, changes }`), `pages`, `actions`, `run` |

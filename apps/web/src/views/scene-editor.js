@@ -1,13 +1,15 @@
-import { DISPLAYS, NUMERIC_DISPLAYS } from '../../../../packages/shared/src/floorplan.js';
+import { CHART_RANGES, DISPLAYS, NUMERIC_DISPLAYS } from '../../../../packages/shared/src/floorplan.js';
 import { displayCapabilities, displayRange } from '../floorplan-visuals.js';
 import { deviceIcon, labelFor } from '../controls.js';
 import { h, toast } from '../ui.js';
 import { field } from './auth.js';
 import { selectField, valueField } from './value-fields.js';
+import { timerField } from './device-timer.js';
 
 const CLICK_CHOICES = [
   ['details', 'Open full device card'], ['command', 'Send device command'], ['action', 'Run a saved action'],
   ['message', 'Show a message'], ['none', 'Do nothing'],
+  ['chart', 'Open chart'],
 ];
 const DISPLAY_COLORS = ['color', 'badge', 'threshold', 'status'];
 const FALLBACKS = { floorColor: '#9a9eaa', wallColor: '#838999', edgeColor: '#525a6a' };
@@ -55,29 +57,45 @@ export function placementEditor(placement, device, actions, preview) {
 
   function interactionFields() {
     const click = placement.click ?? { mode: 'details' };
-    const modes = CLICK_CHOICES.filter(([mode]) => mode !== 'command' || click.mode === 'command' ||
-      device.capabilities.some((c) => c.writable));
+    const readings = displayCapabilities(device, 'chart');
+    const modes = CLICK_CHOICES.filter(([mode]) => mode === 'command'
+      ? click.mode === 'command' || device.capabilities.some((c) => c.writable)
+      : mode !== 'chart' || click.mode === 'chart' || readings.length);
     interaction.replaceChildren(...[
       selectField('When clicked', modes, click.mode, (mode) => {
         if (mode === 'details') delete placement.click;
-        else placement.click = mode === 'command' ? { mode, values: {} } : { mode };
+        else if (mode === 'command') placement.click = { mode, values: {} };
+        else if (mode === 'chart') placement.click = { mode, property: readings[0]?.property, range: '24h' };
+        else placement.click = { mode };
         interactionFields();
       }),
-      click.mode === 'command' ? commandFields(click.values) : null,
+      click.mode === 'command' ? commandFields(click) : null,
       click.mode === 'action' ? selectField('Action to run', actions.map((a) => [a.id, a.name]), click.actionId,
         (id) => { click.actionId = id; }, { placeholder: 'Choose an action', required: true }) : null,
       click.mode === 'message' ? field('Message in HomeyVibe', h('input', {
         value: click.message ?? '', maxLength: 200, required: true, oninput: (e) => { click.message = e.target.value; },
       })) : null,
+      click.mode === 'chart' ? [
+        selectField('Chart reading', readings.map((cap) => [cap.property, labelFor(cap)]), click.property,
+          (property) => { click.property = property; }),
+        selectField('Chart time range', Object.entries(CHART_RANGES), click.range ?? '24h', (range) => { click.range = range; }),
+        h('div.scene-fields-pair', {},
+          numberField('Chart minimum', click, 'min', { placeholder: 'Automatic' }, () => {}),
+          numberField('Chart maximum', click, 'max', { placeholder: 'Automatic' }, () => {})),
+      ] : null,
     ].flat().filter(Boolean));
   }
 
-  function commandFields(values) {
+  function commandFields(click) {
+    const { values } = click;
     const writable = device.capabilities.filter((cap) => cap.writable);
     const addable = writable.filter((cap) => !Object.hasOwn(values, cap.property));
     return [
       ...Object.entries(values).map(([key, value]) => h('div.scene-command', {},
-        valueField(writable.find((cap) => cap.property === key), key, value, (next) => { values[key] = next; }),
+        valueField(writable.find((cap) => cap.property === key), key, value, (next) => {
+          values[key] = next;
+          if (writable.find((cap) => cap.property === key)?.type === 'binary') interactionFields();
+        }),
         h('button.icon-button', {
           type: 'button', 'aria-label': `Remove ${key}`, onclick: () => { delete values[key]; interactionFields(); },
         }, '✕'),
@@ -89,6 +107,7 @@ export function placementEditor(placement, device, actions, preview) {
           (cap.type === 'numeric' ? 0 : cap.type === 'text' ? '' : undefined);
         interactionFields();
       }, { placeholder: 'Choose a writable control', disabled: !addable.length, required: !Object.keys(values).length }),
+      timerField(click, device),
     ];
   }
 

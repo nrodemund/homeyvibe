@@ -9,6 +9,11 @@ import { openConfigDialog } from './config.js';
 
 import { ICONS } from '../floorplan.js';
 import { pageIdForHash } from '../floorplan-visuals.js';
+import { openPasskeys, runSavedAction } from './action-security.js';
+import { openDeviceNotifications } from './device-notifications.js';
+import { openDeviceHistory } from './device-history.js';
+import { openTimer, timerLabel } from './device-timer.js';
+import { installButton } from '../install.js';
 
 /**
  * Device dashboard. Returns a cleanup function.
@@ -20,6 +25,7 @@ export function renderDashboard(root, user, onSignedOut) {
   const canControl = user.permissions.includes('devices:control');
   const canEdit = user.permissions.includes('config:write');
   const devices = new Map();
+  const timers = new Map();
   const app = root;
   app.innerHTML = `
     <header class="topbar">
@@ -54,6 +60,9 @@ export function renderDashboard(root, user, onSignedOut) {
   menu.querySelector('summary').textContent = user.displayName;
   menu.querySelector('.menu-items').append(...[
     h('p.muted', {}, `@${user.username} · ${user.role}`),
+    installButton(),
+    h('button', { type: 'button', onclick: () => { menu.open = false; openPasskeys().catch((err) => toast(err.message)); } }, 'Passkeys'),
+    h('button', { type: 'button', onclick: () => { menu.open = false; openDeviceNotifications().catch((err) => toast(err.message)); } }, 'Notifications'),
     canEdit ? h('button', { type: 'button', onclick: openZigbee }, 'Zigbee2MQTT') : null,
     canEdit ? h('button', { type: 'button', onclick: () => editConfig('pages') }, 'Pages') : null,
     canEdit ? h('button', { type: 'button', onclick: () => editConfig('actions') }, 'Actions') : null,
@@ -85,6 +94,9 @@ export function renderDashboard(root, user, onSignedOut) {
       devices.clear();
       for (const d of JSON.parse(e.data)) devices.set(d.id, d);
       [pages, actions] = await Promise.all([api.pages(), api.actions()]).catch(() => [pages, actions]);
+      const active = await api.timers().catch(() => []);
+      timers.clear();
+      for (const timer of active) timers.set(timer.deviceId, timer);
       if (floorplan) {
         floorplan = await api.floorplan().catch(() => floorplan);
         home3d?.setPlan(floorplan);
@@ -131,6 +143,14 @@ export function renderDashboard(root, user, onSignedOut) {
       updateValues(d, Object.keys(changes));
       home3d?.update(d, changes);
     });
+    source.addEventListener('timer', (e) => {
+      const { deviceId, timer } = JSON.parse(e.data);
+      if (timer) timers.set(deviceId, timer);
+      else timers.delete(deviceId);
+      home3d?.refreshTimer(deviceId);
+      const device = devices.get(deviceId);
+      if (device) for (const card of cardEls(deviceId)) renderTimer(card.querySelector('.card-timer'), device);
+    });
   }
 
   function setConn(status, text) {
@@ -141,6 +161,7 @@ export function renderDashboard(root, user, onSignedOut) {
   let stop = () => {
     source?.close();
     destroy3d();
+    clearInterval(countdown);
   };
 
   async function send(id, values) {
@@ -242,8 +263,9 @@ export function renderDashboard(root, user, onSignedOut) {
           listActions: () => actions,
           renderCard,
           fetchHistory: api.deviceHistory,
-          sendCommand: api.setDevice,
-          runAction: api.runAction,
+          sendCommand: (id, values, timer) => timer ? api.setTimedDevice(id, values, timer) : api.setDevice(id, values),
+          runAction: (id) => runSavedAction(actions.find((action) => action.id === id)),
+          timers,
           onSave: async (next) => (floorplan = await api.saveFloorplan(next)),
         });
         placeholder.replaceWith(home3d.el);
@@ -281,8 +303,8 @@ export function renderDashboard(root, user, onSignedOut) {
       onclick: async () => {
         button.classList.add('running');
         try {
-          const result = await api.runAction(action.id);
-          if (!result.ok) toast(`${action.name} failed: ${result.error}`);
+          const result = await runSavedAction(action);
+          if (result && !result.ok) toast(`${action.name} failed: ${result.error}`);
         } catch (err) {
           toast(err.message);
         } finally {
@@ -300,6 +322,10 @@ export function renderDashboard(root, user, onSignedOut) {
     card.dataset.device = device.id;
     if (only) card.dataset.properties = only.join(',');
     card.classList.toggle('unavailable', device.available === false);
+    card.addEventListener('contextmenu', (event) => {
+      event.preventDefault();
+      openDeviceHistory(device, canEdit);
+    });
 
     const capabilities = only ? device.capabilities.filter((c) => only.includes(c.property)) : device.capabilities;
     const { primary, diagnostic } = splitCapabilities(capabilities);
@@ -322,8 +348,32 @@ export function renderDashboard(root, user, onSignedOut) {
     for (const cap of primary) caps.append(renderCap(device, cap));
     const diag = card.querySelector('.diag');
     for (const cap of diagnostic) diag.append(renderCap(device, cap));
+    const timer = h('div.card-timer');
+    renderTimer(timer, device);
+    card.append(timer);
     return card;
   }
+
+  function renderTimer(container, device) {
+    if (!container) return;
+    const timer = timers.get(device.id);
+    container.hidden = !timer;
+    container.replaceChildren();
+    if (!timer) return;
+    container.append(canControl && device.access !== 'view'
+      ? h('button', { type: 'button', onclick: () => openTimer(device, timers.get(device.id) ?? timer) }, timerLabel(timer))
+      : h('span.muted', {}, timerLabel(timer)));
+  }
+
+  const countdown = setInterval(() => {
+    for (const [id, timer] of timers) {
+      for (const card of cardEls(id)) {
+        const label = card.querySelector('.card-timer > *');
+        if (label) label.textContent = timerLabel(timer);
+      }
+      home3d?.refreshTimer(id);
+    }
+  }, 1000);
 
   function renderCap(device, cap) {
     const row = document.createElement('div');

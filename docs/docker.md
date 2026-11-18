@@ -80,7 +80,7 @@ The updater needs access to the Docker socket to restart containers. It only eve
 
 ## Backups
 
-All HomeyVibe data (users, pages, actions, floor plan, AI settings and broker settings) is in the `homeyvibe_homeyvibe-data` volume:
+The `homeyvibe_homeyvibe-data` volume holds HomeyVibe's configuration, accounts, timers and SQLite history. Stop the server briefly during a file-level backup so the database and its journal are copied together.
 
 ```sh
 docker run --rm -v homeyvibe_homeyvibe-data:/data -v "$PWD":/backup alpine \
