@@ -105,6 +105,15 @@ The prompt `set_up_my_home` asks the AI to propose pages and actions and apply t
 
 `GET /api/ai/context` downloads a Markdown file describing every device, the current pages and actions, and the formats. Give it to any AI, then paste its JSON answer into the import box (`POST /api/ai/import`, admins). Imports are checked against real devices, capabilities and value ranges, and nothing is saved unless everything is valid.
 
+### Built-in assistant
+
+The chat button in the web app talks to Claude (`claude-opus-5-5` by default) with the same tools as the MCP server, limited by each person's role. An admin adds a Claude API key under **Set up with AI** (stored in the data directory, never sent back to browsers), or set `ANTHROPIC_API_KEY` for the server. Usage is billed to that key.
+
+- `POST /api/ai/chat` with `{ message, conversationId? }` streams Server-Sent Events: `start`, `text` (`delta`), `tool` / `tool_result`, `done`, `error`.
+- Turning things on and off happens straight away. The assistant describes deletions and bulk configuration changes first and waits for a yes.
+- Conversations are kept in memory for 6 hours (10 per person).
+- Requests use server-side refusal fallbacks (`fallbacks: "default"`) and prompt caching for the tool definitions and instructions.
+
 ### Access tokens
 
 `GET/POST /api/auth/tokens`, `DELETE /api/auth/tokens/:id`. Tokens start with `hv_`, are shown once, stored hashed, and are removed when their user is deleted.

@@ -33,7 +33,7 @@ npm run demo -w @homeyvibe/server   # simulated devices, no hardware needed
 npm run dev -w @homeyvibe/web       # http://localhost:5173
 ```
 
-Sign in, then open **Set up with AI** in the user menu to connect Claude or Codex, or to download a context file for any AI.
+Sign in, then open **Set up with AI** in the user menu to connect Claude or Codex, to download a context file for any AI, or to add a Claude API key for the built-in assistant (the ✦ button).
 
 With real hardware, start the server with `MQTT_URL=mqtt://your-broker:1883 npm run dev -w @homeyvibe/server` instead. See [apps/server](apps/server/README.md) and [apps/web](apps/web/README.md).
 

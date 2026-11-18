@@ -38,8 +38,12 @@ const COOKIE_MAX_AGE_S = 30 * 24 * 60 * 60;
  *   GET  /api/ai/context                      devices:read (Markdown for any LLM)
  *   POST /api/ai/import                       config:write ({ pages, actions } from an LLM)
  *   POST /mcp                                 MCP (Streamable HTTP, stateless), Bearer token
+ *   GET  /api/ai/settings                     signed in: { configured, source, keyHint, model }
+ *   PATCH /api/ai/settings                    config:write: { apiKey?, model? }
+ *   POST /api/ai/chat                         devices:read: { message, conversationId? } -> SSE
+ *   DELETE /api/ai/chat/:id                   forget a conversation
  */
-export function createApiHandler({ registry, auth, pages, actions, engine }) {
+export function createApiHandler({ registry, auth, pages, actions, engine, aiSettings, chat }) {
   const routes = [
     ['GET', '/api/health', { public: true }, () => ({ ok: true, name: 'homeyvibe' })],
 
@@ -92,6 +96,19 @@ export function createApiHandler({ registry, auth, pages, actions, engine }) {
         importConfig({ bundle: body, pages, actions, registry })],
       ['POST', '/mcp', { permission: PERMISSIONS.DEVICES_READ, raw: true }, ({ req, res, body, user }) =>
         handleMcpRequest({ req, res, body, user, deps: { registry, pages, actions, engine } })],
+    ] : []),
+    ...(aiSettings ? [
+      ['GET', '/api/ai/settings', {}, () => aiSettings.status()],
+      ['PATCH', '/api/ai/settings', { permission: PERMISSIONS.CONFIG_WRITE }, ({ body }) =>
+        aiSettings.update(pick(body, ['apiKey', 'model']))],
+    ] : []),
+    ...(chat ? [
+      ['POST', '/api/ai/chat', { permission: PERMISSIONS.DEVICES_READ, raw: true }, ({ req, res, body, user }) =>
+        streamChat({ req, res, body, user, chat })],
+      ['DELETE', '/api/ai/chat/:id', {}, ({ user, params }) => {
+        chat.reset(user.id, params.id);
+        return { ok: true };
+      }],
     ] : []),
     ...(engine ? [['POST', '/api/actions/:id/run', { permission: PERMISSIONS.DEVICES_CONTROL }, ({ params, user }) =>
       engine.run(params.id, { by: `user:${user.username}` })]] : []),
@@ -230,6 +247,28 @@ function checkSameOrigin(req) {
 
 function pick(obj, keys) {
   return Object.fromEntries(keys.filter((k) => obj?.[k] !== undefined).map((k) => [k, obj[k]]));
+}
+
+/** Run a chat turn, streaming events as SSE. Errors before the first event become normal JSON errors. */
+async function streamChat({ req, res, body, user, chat }) {
+  const controller = new AbortController();
+  res.on('close', () => { if (!res.writableFinished) controller.abort(); });
+  const emit = (event, data) => {
+    if (!res.headersSent) {
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
+    }
+    if (!res.writableEnded) res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+  try {
+    await chat.send({ user, conversationId: body.conversationId, message: body.message, emit, signal: controller.signal });
+  } catch (err) {
+    if (!res.headersSent) throw err;
+    if (!controller.signal.aborted) {
+      emit('error', { message: Number.isInteger(err.status) ? err.message : 'Something went wrong' });
+      if (!Number.isInteger(err.status)) console.error(err);
+    }
+  }
+  res.end();
 }
 
 const HEARTBEAT_MS = 25_000;

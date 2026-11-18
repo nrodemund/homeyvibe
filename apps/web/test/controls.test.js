@@ -52,3 +52,12 @@ test('parseBundle accepts raw JSON and fenced Markdown answers', async () => {
   assert.deepEqual(parseBundle('Here you go:\n```json\n{"actions":[]}\n```\nEnjoy'), { actions: [] });
   assert.throws(() => parseBundle('no json here'), /not valid JSON/);
 });
+
+test('readEvents parses a streamed SSE body split across chunks', async () => {
+  const { readEvents } = await import('../src/views/chat.js');
+  const chunks = ['event: start\ndata: {"conversationId":"c1"}\n\nevent: te', 'xt\ndata: {"delta":"Hi"}\n\n'];
+  const body = new ReadableStream({ start(c) { for (const ch of chunks) c.enqueue(new TextEncoder().encode(ch)); c.close(); } });
+  const events = [];
+  for await (const e of readEvents({ body })) events.push(e);
+  assert.deepEqual(events, [{ event: 'start', data: { conversationId: 'c1' } }, { event: 'text', data: { delta: 'Hi' } }]);
+});

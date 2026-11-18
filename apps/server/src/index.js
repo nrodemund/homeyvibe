@@ -8,6 +8,7 @@ import { JsonStore } from './store/json-store.js';
 import { AuthService } from './auth/auth.js';
 import { PageStore } from './config/pages.js';
 import { ActionStore, ActionEngine } from './config/actions.js';
+import { AiSettings, ChatService } from './ai/chat.js';
 
 const port = Number(process.env.PORT ?? 8080);
 const demo = process.env.HOMEYVIBE_DEMO === '1';
@@ -23,6 +24,8 @@ const pages = new PageStore({ store });
 const actions = new ActionStore({ store });
 const engine = new ActionEngine({ actions, registry });
 engine.start();
+const aiSettings = new AiSettings({ store });
+const chat = new ChatService({ settings: aiSettings, registry, pages, actions, engine });
 engine.on('run', (r) => console.log(`Action ${r.actionId} by ${r.by}: ${r.ok ? 'ok' : r.error}`));
 
 if (demo) {
@@ -43,7 +46,7 @@ if (mqttUrl) {
   createZigbee2mqttProvider({ client, registry, baseTopic: z2mBaseTopic, log: console.log });
 }
 
-createServer(createApiHandler({ registry, auth, pages, actions, engine })).listen(port, () =>
+createServer(createApiHandler({ registry, auth, pages, actions, engine, aiSettings, chat })).listen(port, () =>
   console.log(
     `HomeyVibe server on :${port}` + (auth.needsSetup() ? ' (no users yet: open the web app to create the first admin)' : ''),
   ),
