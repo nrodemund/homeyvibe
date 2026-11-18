@@ -5,9 +5,7 @@ import { openUsersDialog } from './users.js';
 import { openAiDialog } from './ai.js';
 import { createChat } from './chat.js';
 
-const ICONS = {
-  light: '💡', switch: '🔘', cover: '🪟', climate: '🌡️', lock: '🔒', fan: '🌀', sensor: '📟', device: '📦',
-};
+import { ICONS } from '../floorplan.js';
 
 /**
  * Device dashboard. Returns a cleanup function.
@@ -17,6 +15,7 @@ const ICONS = {
  */
 export function renderDashboard(root, user, onSignedOut) {
   const canControl = user.permissions.includes('devices:control');
+  const canEdit = user.permissions.includes('config:write');
   const devices = new Map();
   const app = root;
   app.innerHTML = `
@@ -40,6 +39,10 @@ export function renderDashboard(root, user, onSignedOut) {
   let pages = [];
   let actions = [];
   let controlSeq = 0;
+  let floorplan = null; // loaded with the first 3D page
+  let home3d = null; // the live 3D view, kept while its page stays open
+  let home3dPage = null;
+  let home3dProps = new Map();
   const conn = app.querySelector('.conn');
   const empty = app.querySelector('.empty');
   const menu = app.querySelector('.menu');
@@ -74,6 +77,10 @@ export function renderDashboard(root, user, onSignedOut) {
       devices.clear();
       for (const d of JSON.parse(e.data)) devices.set(d.id, d);
       [pages, actions] = await Promise.all([api.pages(), api.actions()]).catch(() => [pages, actions]);
+      if (floorplan) {
+        floorplan = await api.floorplan().catch(() => floorplan);
+        home3d?.setPlan(floorplan);
+      }
       renderTabs();
       renderView();
     });
@@ -82,7 +89,8 @@ export function renderDashboard(root, user, onSignedOut) {
       const isNew = !devices.has(d.id);
       devices.set(d.id, d);
       if (isNew) renderView();
-      else for (const card of cardEls(d.id)) card.replaceWith(renderCard(d, card.dataset.properties ? card.dataset.properties.split(',') : null));
+      home3d?.update(d);
+      if (!isNew) for (const card of cardEls(d.id)) card.replaceWith(renderCard(d, card.dataset.properties ? card.dataset.properties.split(',') : null));
     });
     source.addEventListener('removed', (e) => {
       devices.delete(JSON.parse(e.data).id);
@@ -97,6 +105,10 @@ export function renderDashboard(root, user, onSignedOut) {
       actions = JSON.parse(e.data);
       renderView();
     });
+    source.addEventListener('floorplan', (e) => {
+      floorplan = JSON.parse(e.data);
+      home3d?.setPlan(floorplan);
+    });
     source.addEventListener('run', (e) => {
       const run = JSON.parse(e.data);
       if (!run.ok) toast(`${actionName(run.actionId)} failed: ${run.error}`);
@@ -107,6 +119,7 @@ export function renderDashboard(root, user, onSignedOut) {
       if (!d) return;
       d.state = { ...d.state, ...changes };
       updateValues(d, Object.keys(changes));
+      home3d?.update(d);
     });
   }
 
@@ -117,6 +130,7 @@ export function renderDashboard(root, user, onSignedOut) {
 
   let stop = () => {
     source?.close();
+    destroy3d();
   };
 
   async function send(id, values) {
@@ -152,11 +166,23 @@ export function renderDashboard(root, user, onSignedOut) {
     const page = pages.find((p) => p.id === currentPageId());
     view.replaceChildren();
     empty.hidden = devices.size > 0;
+    if (page?.layout !== '3d') destroy3d();
     if (!page) {
       const enabled = actions.filter((a) => a.enabled);
       if (enabled.length) view.append(section('Actions', enabled.map(renderAction), 'actions'));
       const sorted = [...devices.values()].sort((a, b) => a.name.localeCompare(b.name));
       view.append(section(null, sorted.map((d) => renderCard(d))));
+      return;
+    }
+    if (page.layout === '3d') {
+      for (const sec of page.sections.filter((s) => s.items.some((i) => i.type === 'action'))) {
+        const items = sec.items.filter((i) => i.type === 'action').map((item) => {
+          const action = actions.find((a) => a.id === item.actionId);
+          return action ? renderAction(action) : missing(`Action ${item.actionId} not found`);
+        });
+        view.append(section(sec.title, items, 'actions'));
+      }
+      view.append(render3d(page));
       return;
     }
     for (const sec of page.sections) {
@@ -172,6 +198,52 @@ export function renderDashboard(root, user, onSignedOut) {
       view.append(section(sec.title, items, onlyActions ? 'actions' : 'devices'));
     }
     if (!page.sections.length) view.append(h('p.empty', {}, 'This page is empty.'));
+  }
+
+  /** The 3D stage for a page: devices listed on the page (or every placed device) in the floor plan. */
+  function render3d(page) {
+    const ids = [];
+    const hints = new Map();
+    home3dProps = new Map();
+    for (const sec of page.sections) {
+      for (const item of sec.items) {
+        if (item.type !== 'device') continue;
+        ids.push(item.deviceId);
+        if (sec.title) hints.set(item.deviceId, sec.title);
+        if (item.properties) home3dProps.set(item.deviceId, item.properties);
+      }
+    }
+    const deviceIds = ids.length ? ids : null;
+    if (home3d && home3dPage === page.id) {
+      home3d.setDevices(deviceIds, hints);
+      return home3d.el;
+    }
+    destroy3d();
+    home3dPage = page.id;
+    const placeholder = h('section.stage.loading', {}, h('p.muted', {}, 'Loading 3D view…'));
+    Promise.all([import('./home3d.js'), floorplan ?? api.floorplan()])
+      .then(([mod, plan]) => {
+        floorplan = plan;
+        if (home3dPage !== page.id || !placeholder.isConnected) return;
+        home3d = mod.createHome3d({
+          plan,
+          devices,
+          deviceIds,
+          hints,
+          canEdit,
+          renderCard: (d) => renderCard(d, home3dProps.get(d.id) ?? null),
+          onSave: async (next) => (floorplan = await api.saveFloorplan(next)),
+        });
+        placeholder.replaceWith(home3d.el);
+      })
+      .catch((err) => placeholder.replaceChildren(h('p.empty', {}, `Could not load the 3D view: ${err.message}`)));
+    return placeholder;
+  }
+
+  function destroy3d() {
+    home3d?.destroy();
+    home3d = null;
+    home3dPage = null;
   }
 
   function section(title, children, kind = 'devices') {

@@ -36,6 +36,8 @@ const COOKIE_MAX_AGE_S = 30 * 24 * 60 * 60;
  *   POST /api/actions/:id/run                 devices:control
  *   GET|POST /api/auth/tokens, DELETE /api/auth/tokens/:id   own access tokens
  *   GET  /api/ai/context                      devices:read (Markdown for any LLM)
+ *   GET  /api/floorplan                       devices:read: { rooms, devices } (see config/floorplan.js)
+ *   PUT  /api/floorplan                       config:write: replace the floor plan
  *   POST /api/ai/import                       config:write ({ pages, actions } from an LLM)
  *   POST /mcp                                 MCP (Streamable HTTP, stateless), Bearer token
  *   GET  /api/ai/settings                     signed in: { configured, source, keyHint, model }
@@ -43,7 +45,7 @@ const COOKIE_MAX_AGE_S = 30 * 24 * 60 * 60;
  *   POST /api/ai/chat                         devices:read: { message, conversationId? } -> SSE
  *   DELETE /api/ai/chat/:id                   forget a conversation
  */
-export function createApiHandler({ registry, auth, pages, actions, engine, aiSettings, chat }) {
+export function createApiHandler({ registry, auth, pages, actions, engine, aiSettings, chat, floorplan = null }) {
   const routes = [
     ['GET', '/api/health', { public: true }, () => ({ ok: true, name: 'homeyvibe' })],
 
@@ -79,8 +81,12 @@ export function createApiHandler({ registry, auth, pages, actions, engine, aiSet
     ['POST', '/api/devices/:id/set', { permission: PERMISSIONS.DEVICES_CONTROL, status: 202 }, ({ params, body }) =>
       registry.command(params.id, body)],
     ['GET', '/api/events', { permission: PERMISSIONS.DEVICES_READ, raw: true }, ({ req, res }) =>
-      streamEvents(req, res, { registry, pages, actions, engine })],
+      streamEvents(req, res, { registry, pages, actions, engine, floorplan })],
 
+    ...(floorplan ? [
+      ['GET', '/api/floorplan', { permission: PERMISSIONS.DEVICES_READ }, () => floorplan.get()],
+      ['PUT', '/api/floorplan', { permission: PERMISSIONS.CONFIG_WRITE }, ({ body }) => floorplan.replace(body)],
+    ] : []),
     ...(pages ? crudRoutes('pages', pages, 'page') : []),
     ...(actions ? crudRoutes('actions', actions, 'action') : []),
     ...(pages && actions ? [
@@ -90,12 +96,12 @@ export function createApiHandler({ registry, auth, pages, actions, engine, aiSet
           'content-disposition': 'attachment; filename="homeyvibe-context.md"',
           'cache-control': 'no-store',
         });
-        res.end(buildContext({ registry, pages, actions }));
+        res.end(buildContext({ registry, pages, actions, floorplan }));
       }],
       ['POST', '/api/ai/import', { permission: PERMISSIONS.CONFIG_WRITE }, ({ body }) =>
-        importConfig({ bundle: body, pages, actions, registry })],
+        importConfig({ bundle: body, pages, actions, registry, floorplan })],
       ['POST', '/mcp', { permission: PERMISSIONS.DEVICES_READ, raw: true }, ({ req, res, body, user }) =>
-        handleMcpRequest({ req, res, body, user, deps: { registry, pages, actions, engine } })],
+        handleMcpRequest({ req, res, body, user, deps: { registry, pages, actions, engine, floorplan } })],
     ] : []),
     ...(aiSettings ? [
       ['GET', '/api/ai/settings', {}, () => aiSettings.status()],
@@ -273,7 +279,7 @@ async function streamChat({ req, res, body, user, chat }) {
 
 const HEARTBEAT_MS = 25_000;
 
-function streamEvents(req, res, { registry, pages, actions, engine }) {
+function streamEvents(req, res, { registry, pages, actions, engine, floorplan }) {
   res.writeHead(200, {
     'content-type': 'text/event-stream',
     'cache-control': 'no-cache',
@@ -292,6 +298,8 @@ function streamEvents(req, res, { registry, pages, actions, engine }) {
   const onPages = () => emit('pages', pages.list());
   const onActions = () => emit('actions', actions.list());
   const onRun = (result) => emit('run', result);
+  const onFloorplan = (plan) => emit('floorplan', plan);
+  floorplan?.on('changed', onFloorplan);
   pages?.on('changed', onPages);
   actions?.on('changed', onActions);
   engine?.on('run', onRun);
@@ -306,6 +314,7 @@ function streamEvents(req, res, { registry, pages, actions, engine }) {
     pages?.off('changed', onPages);
     actions?.off('changed', onActions);
     engine?.off('run', onRun);
+    floorplan?.off('changed', onFloorplan);
   });
 }
 

@@ -76,9 +76,9 @@ export class AiSettings {
 export class ChatService {
   #conversations = new Map(); // userId -> Map(conversationId -> { messages, updatedAt })
 
-  constructor({ settings, registry, pages, actions, engine, createClient = (apiKey) => new Anthropic({ apiKey }), now = () => Date.now() }) {
+  constructor({ settings, registry, pages, actions, engine, floorplan = null, createClient = (apiKey) => new Anthropic({ apiKey }), now = () => Date.now() }) {
     this.settings = settings;
-    this.deps = { registry, pages, actions, engine };
+    this.deps = { registry, pages, actions, engine, floorplan };
     this.createClient = createClient;
     this.now = now;
   }

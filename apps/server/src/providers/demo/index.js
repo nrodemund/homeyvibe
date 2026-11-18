@@ -74,8 +74,8 @@ export function createDemoProvider({ registry, tickMs = 5000 }) {
   return provider;
 }
 
-/** Example pages and actions for demo mode, only added when none exist yet. */
-export function seedDemoConfig({ pages, actions }) {
+/** Example pages, actions and floor plan for demo mode, only added when none exist yet. */
+export function seedDemoConfig({ pages, actions, floorplan = null }) {
   if (actions.list().length === 0) {
     actions.create({
       id: 'movie-night',
@@ -111,5 +111,30 @@ export function seedDemoConfig({ pages, actions }) {
       icon: '🌡️',
       sections: [{ items: [{ type: 'device', deviceId: 'demo:bathroom_sensor' }, { type: 'device', deviceId: 'demo:bedroom_blind' }] }],
     });
+  }
+  if (floorplan && floorplan.get().rooms.length === 0) {
+    floorplan.replace({
+      rooms: [
+        { name: 'Living room', points: [[0, 0], [5, 0], [5, 4], [0, 4]] },
+        { name: 'Hallway', points: [[5, 0], [6.5, 0], [6.5, 4], [5, 4]] },
+        { name: 'Bathroom', points: [[6.5, 0], [10, 0], [10, 2], [6.5, 2]] },
+        { name: 'Bedroom', points: [[6.5, 2], [10, 2], [10, 6], [6.5, 6], [6.5, 4]] },
+      ],
+      devices: [
+        { deviceId: 'demo:living_room_lamp', roomId: 'living-room', position: [1, 1.6, 3.3] },
+        { deviceId: 'demo:hallway_switch', roomId: 'hallway', position: [5.2, 1.2, 3.6] },
+        { deviceId: 'demo:bathroom_sensor', roomId: 'bathroom', position: [9.6, 1.8, 0.5] },
+        { deviceId: 'demo:bedroom_blind', roomId: 'bedroom', position: [9.85, 1.5, 4.2] },
+      ],
+    });
+    if (!pages.list().some((p) => p.layout === '3d')) {
+      pages.create({
+        id: 'home-3d',
+        title: 'Home in 3D',
+        icon: '🏠',
+        layout: '3d',
+        sections: [{ title: 'Scenes', items: [{ type: 'action', actionId: 'movie-night' }, { type: 'action', actionId: 'all-lights-off' }] }],
+      });
+    }
   }
 }

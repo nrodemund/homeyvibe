@@ -47,7 +47,7 @@ Behind a reverse proxy, keep the `Host` header (or set `X-Forwarded-Host`) and `
 
 ## Pages and actions
 
-**Pages** are dashboard tabs. Each has a title, optional icon, a layout (`grid`, `list`, or `3d` for later) and sections. A section holds items: a device (optionally limited to some `properties`) or an action button.
+**Pages** are dashboard tabs. Each has a title, optional icon, a layout (`grid`, `list` or `3d`) and sections. A section holds items: a device (optionally limited to some `properties`) or an action button.
 
 ```json
 { "title": "Living room", "icon": "🛋️", "sections": [
@@ -67,6 +67,17 @@ Behind a reverse proxy, keep the `Host` header (or set `X-Forwarded-Host`) and `
 ```
 
 Ids are generated from the title or name (`living-room`) unless given. Validation returns every problem in one 400 response, which helps AI clients fix everything in one go. A triggered action won't re-trigger within 2 seconds, so it can't loop on its own state changes.
+
+## Floor plan (3D pages)
+
+Pages with layout `3d` show one shared floor plan with live devices in it. `GET /api/floorplan` (devices:read) returns it and `PUT /api/floorplan` (config:write) replaces it; changes stream as the `floorplan` event.
+
+```json
+{ "rooms": [{ "name": "Living room", "floor": 0, "height": 2.5, "points": [[0, 0], [5, 0], [5, 4], [0, 4]] }],
+  "devices": [{ "deviceId": "z2m:0x…", "roomId": "living-room", "position": [2.5, 2.2, 2] }] }
+```
+
+Coordinates are meters seen from above (`points` are `[x, z]` corners in order; `position` is `[x, height, z]`). Room ids come from names. A 3D page shows the devices listed in its sections, or every placed device when it lists none. The AI can edit the plan with the `save_floorplan` tool or a `floorplan` key in an import bundle, and room scanning will write it too.
 
 ## AI configuration
 
