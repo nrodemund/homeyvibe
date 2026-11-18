@@ -1,0 +1,25 @@
+# Serves the HomeyVibe web app/PWA and forwards API, live events (SSE) and MCP to the server.
+# Caddy keeps the browser's Host header, which the server's same-origin check relies on.
+{
+	admin off
+}
+
+:80 {
+	encode zstd gzip
+
+	@backend path /api /api/* /mcp /mcp/*
+	handle @backend {
+		reverse_proxy {$HOMEYVIBE_SERVER:server:8080} {
+			flush_interval -1
+		}
+	}
+
+	handle {
+		root * /srv
+		# The service worker and manifest must always be fresh so updates reach installed PWAs.
+		@nocache path /sw.js /manifest.webmanifest /index.html /
+		header @nocache Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
+	}
+}
