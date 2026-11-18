@@ -11,6 +11,13 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    secrets:
+      - source: tunnel-token
+        target: /run/relay/token
+      - source: control-cert
+        target: /run/relay/control.crt
+      - source: control-key
+        target: /run/relay/control.key
     volumes:
       - type: bind
         source: ./frps.toml
@@ -18,9 +25,11 @@ services:
         read_only: true
         bind:
           create_host_path: false
-      - type: bind
-        source: ./cloud-credentials
-        target: /run/relay
-        read_only: true
-        bind:
-          create_host_path: false
+
+secrets:
+  tunnel-token:
+    file: ./cloud-credentials/token
+  control-cert:
+    file: ./cloud-credentials/control.crt
+  control-key:
+    file: ./cloud-credentials/control.key

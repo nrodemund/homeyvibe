@@ -28,7 +28,8 @@ cleanup() {
 }
 
 trap cleanup EXIT
-mkdir -p "$fixture/cloud" "$fixture/pi/relay/connector-credentials"
+mkdir -p "$fixture/cloud" "$fixture/pi/relay"
+install -d -m 0700 "$fixture/pi/relay/connector-credentials"
 cp docker/relay/compose.yml docker/relay/frps.toml docker/relay/create-cloud-credentials.sh "$fixture/cloud/"
 cp docker/relay/pi.compose.yml docker/relay/frpc.toml docker/relay/Caddyfile \
   docker/relay/install-web-certificate.sh "$fixture/pi/relay/"
@@ -64,7 +65,7 @@ EOF
 
 docker network create "$network"
 sh "$fixture/cloud/create-cloud-credentials.sh"
-cp "$fixture/cloud/cloud-credentials/control.crt" "$fixture/cloud/cloud-credentials/token" \
+cp -p "$fixture/cloud/cloud-credentials/control.crt" "$fixture/cloud/cloud-credentials/token" \
   "$fixture/pi/relay/connector-credentials/"
 mkdir "$fixture/browser-cert"
 

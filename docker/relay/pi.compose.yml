@@ -30,6 +30,11 @@ services:
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    secrets:
+      - source: tunnel-token
+        target: /run/relay/token
+      - source: control-cert
+        target: /run/relay/control.crt
     volumes:
       - type: bind
         source: ./relay/frpc.toml
@@ -37,9 +42,9 @@ services:
         read_only: true
         bind:
           create_host_path: false
-      - type: bind
-        source: ./relay/connector-credentials
-        target: /run/relay
-        read_only: true
-        bind:
-          create_host_path: false
+
+secrets:
+  tunnel-token:
+    file: ./relay/connector-credentials/token
+  control-cert:
+    file: ./relay/connector-credentials/control.crt
